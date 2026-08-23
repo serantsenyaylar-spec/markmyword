@@ -95,7 +95,7 @@ div[data-testid="stButton"] > button {
 </style>
 """, unsafe_allow_html=True)
 
-# --- SESSION STATE INITIALIZATION ---
+# --- SESSION STATE INITIALIZATION & PERSISTENCE ---
 if "graded_count" not in st.session_state:
     st.session_state.graded_count = 0
 
@@ -110,6 +110,19 @@ if "preset_template" not in st.session_state:
 
 if "demo_loaded" not in st.session_state:
     st.session_state.demo_loaded = False
+
+# Persistent Rubric & Assignment Info State
+if "custom_rubric_df" not in st.session_state:
+    st.session_state.custom_rubric_df = None
+
+if "active_question" not in st.session_state:
+    st.session_state.active_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
+
+if "total_rubric_scale" not in st.session_state:
+    st.session_state.total_rubric_scale = 100
+
+if "raw_rubric" not in st.session_state:
+    st.session_state.raw_rubric = ""
 
 # --- USER IDENTITY EXTRACTION ---
 def extract_user_identity():
@@ -216,6 +229,21 @@ def check_authentication():
 
         st.divider()
 
+        # System Diagnostics Panel
+        with st.expander("🛠️ **System Diagnostics**", expanded=False):
+            gemini_ok = "gemini_api_key" in st.secrets
+            openai_ok = "openai_api_key" in st.secrets
+            anthropic_ok = "anthropic_api_key" in st.secrets
+            creds_ok = "google_credentials" in st.secrets
+
+            st.write("• **Gemini 3.6 API:**", "🟢 Connected" if gemini_ok else "🔴 Missing Secret")
+            st.write("• **OpenAI API:**", "🟢 Connected" if openai_ok else "🔴 Missing Secret")
+            st.write("• **Claude API:**", "🟢 Connected" if anthropic_ok else "🔴 Missing Secret")
+            st.write("• **Google Workspace:**", "🟢 Connected" if creds_ok else "⚠️ Unlinked")
+            st.write("• **Custom Rubric Memory:**", "🟢 Stored" if st.session_state.custom_rubric_df is not None else "⚪ Default")
+
+        st.divider()
+
         st.markdown("### 🌐 **Google Workspace**")
         gcol1, gcol2 = st.columns(2)
         with gcol1:
@@ -303,6 +331,18 @@ def check_validity(res_dict):
         return val.strip().lower() in ["true", "1", "yes"]
     return False
 
+def detect_max_score(df):
+    possible_cols = ["max score", "max points", "points", "score", "max_score", "max_points", "weight"]
+    for col in df.columns:
+        if str(col).strip().lower() in possible_cols:
+            try:
+                val = int(pd.to_numeric(df[col]).sum())
+                if val > 0:
+                    return val
+            except Exception:
+                pass
+    return 100
+
 # --- STRUCTURED EVALUATION RUNNERS ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
 Evaluate the student essay based STRICTLY on the provided rubric in <rubric_data> and the specific assignment prompt in <assignment_question>.
@@ -321,7 +361,7 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
-# Gemini 3.6 Flash Execution
+# Gemini 3.6 Flash
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
     candidate_models = ["gemini-3.6-flash", "gemini-2.5-flash"]
     last_err = ""
@@ -361,7 +401,7 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
         "word_count": 0
     }
 
-# OpenAI GPT Free Tier Equivalent (GPT-4o Mini)
+# OpenAI GPT-4o Mini
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
         if mime_type.startswith("text/"):
@@ -388,7 +428,7 @@ def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"GPT-4o-mini Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# Anthropic Claude 3.5 Sonnet Execution
+# Anthropic Claude 3.5 Sonnet
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     try:
         if mime_type.startswith("text/"):
@@ -442,14 +482,16 @@ with wizard_tab1:
     with qc1:
         if st.button("📝 B1 Guided Essay\n(120–150 words)", use_container_width=True):
             st.session_state.preset_template = "Guided Essay Writing (120–150 words)"
+            st.session_state.custom_rubric_df = None
             st.rerun()
     with qc2:
         if st.button("📄 B1 Guided Paragraph\n(70–90 words)", use_container_width=True):
             st.session_state.preset_template = "Guided Paragraph Writing (70–90 words)"
+            st.session_state.custom_rubric_df = None
             st.rerun()
     with qc3:
         if st.button("🎨 Custom Assignment\n(Upload Prompt & Rubric)", use_container_width=True):
-            st.session_state.preset_template = "Guided Essay Writing (120–150 words)"
+            st.session_state.preset_template = "Custom Assignment"
             st.rerun()
 
     st.divider()
@@ -459,8 +501,8 @@ with wizard_tab1:
     with col_assign1:
         assignment_type = st.selectbox(
             "Assignment Type", 
-            ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)"],
-            index=0 if st.session_state.preset_template == "Guided Essay Writing (120–150 words)" else 1
+            ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)", "Custom Assignment"],
+            index=0 if st.session_state.preset_template == "Guided Essay Writing (120–150 words)" else (1 if st.session_state.preset_template == "Guided Paragraph Writing (70–90 words)" else 2)
         )
 
         question_option = st.radio("Assignment Questions / Prompt Source", ["Use Preset Question Prompt", "Type Custom Question / Prompt", "Upload Question File (.txt / .json)"], horizontal=True)
@@ -469,21 +511,23 @@ with wizard_tab1:
         default_para_question = "Write a 70-90 word paragraph describing your ideal morning routine before school starts. Explain why each activity helps your day."
 
         if question_option == "Use Preset Question Prompt":
-            active_question = default_essay_question if "Essay" in assignment_type else default_para_question
-            st.info(f"📌 **Current Assignment Question:**\n\n{active_question}")
+            active_q = default_essay_question if "Essay" in assignment_type else default_para_question
         elif question_option == "Type Custom Question / Prompt":
-            active_question = st.text_area(
+            active_q = st.text_area(
                 "Enter Assignment Question / Prompt for AI Evaluation:", 
-                value=default_essay_question if "Essay" in assignment_type else default_para_question,
+                value=st.session_state.active_question,
                 height=110
             )
         else:
             q_file = st.file_uploader("Upload Question File (.txt)", type=["txt", "json"])
             if q_file:
-                active_question = q_file.getvalue().decode("utf-8", errors="ignore")
+                active_q = q_file.getvalue().decode("utf-8", errors="ignore")
                 st.success("✅ Custom assignment question loaded successfully.")
             else:
-                active_question = default_essay_question if "Essay" in assignment_type else default_para_question
+                active_q = st.session_state.active_question
+
+        st.session_state.active_question = active_q
+        st.info(f"📌 **Active Prompt Configured:**\n\n{st.session_state.active_question}")
 
     with col_assign2:
         default_fn = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
@@ -496,39 +540,40 @@ with wizard_tab1:
                 "Description": ["Fulfills prompt criteria", "Logical structure and paragraphs", "Correct syntax, spelling, punctuation"]
             })
 
-        rubric_source = st.radio("Rubric Source", ["Use Pre-installed Default", "Upload Custom Rubric"], horizontal=True)
+        rubric_source = st.radio("Rubric Source", ["Use Default Rubric", "Upload Custom CSV Rubric"], horizontal=True)
 
-        if rubric_source == "Upload Custom Rubric":
-            custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric", type=["csv"])
+        if rubric_source == "Upload Custom CSV Rubric":
+            custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric File", type=["csv"])
             if custom_rubric_file:
                 try:
-                    active_rubric_df = pd.read_csv(custom_rubric_file)
-                    st.success("✅ Custom rubric loaded successfully!")
+                    loaded_df = pd.read_csv(custom_rubric_file)
+                    st.session_state.custom_rubric_df = loaded_df
+                    st.success("✅ Custom rubric uploaded & remembered in session state!")
                 except Exception as e:
-                    st.error(f"Error loading CSV: {str(e)}")
-                    active_rubric_df = default_rubric_df
+                    st.error(f"Error reading CSV: {str(e)}")
+
+            if st.session_state.custom_rubric_df is not None:
+                active_rubric_df = st.session_state.custom_rubric_df
+                st.info("🧠 **Currently Using Custom Uploaded Rubric**")
             else:
                 active_rubric_df = default_rubric_df
         else:
+            st.session_state.custom_rubric_df = None
             active_rubric_df = default_rubric_df
 
+        st.dataframe(active_rubric_df, height=140, use_container_width=True)
+
         st.markdown("##### 🎯 Rubric Point Scale")
-        
-        if "Max Score" in active_rubric_df.columns:
-            try:
-                auto_total = int(pd.to_numeric(active_rubric_df["Max Score"]).sum())
-            except Exception:
-                auto_total = 100
-        else:
-            auto_total = 100
+        auto_total = detect_max_score(active_rubric_df)
 
         total_rubric_scale = st.number_input(
             "Total Evaluation Scale (Out Of Number)", 
             min_value=1, max_value=500, value=auto_total, step=1
         )
+        st.session_state.total_rubric_scale = total_rubric_scale
+        st.session_state.raw_rubric = active_rubric_df.to_string()
 
-    raw_rubric = active_rubric_df.to_string()
-    st.success(f"✅ Step 1 Configured! Rubric Scale set to **{total_rubric_scale} Points**.")
+    st.success(f"✅ **Step 1 Configured!** Rubric Scale set to **{st.session_state.total_rubric_scale} Points**.")
 
 # --- TAB 2: UPLOAD & EVALUATE ---
 with wizard_tab2:
@@ -586,18 +631,23 @@ For example, when our English teacher assigned a group presentation last week, w
         openai_client = OpenAI(api_key=st.secrets["openai_api_key"])
         anthropic_client = anthropic.Anthropic(api_key=st.secrets["anthropic_api_key"])
 
+        # Fetch setup info safely from session state
+        active_q = st.session_state.active_question
+        raw_r = st.session_state.raw_rubric
+        scale_val = st.session_state.total_rubric_scale
+
         user_prompt = f"""Assignment Type: {assignment_type}
-Total Rubric Scale: Out of {total_rubric_scale} points.
+Total Rubric Scale: Out of {scale_val} points.
 
 <assignment_question>
-{active_question}
+{active_q}
 </assignment_question>
 
 <rubric_data>
-{raw_rubric}
+{raw_r}
 </rubric_data>
 
-Evaluate the submission. Calculate total_score based on rubric criteria out of {total_rubric_scale}."""
+Evaluate the submission. Calculate total_score based on rubric criteria out of {scale_val}."""
 
         st.session_state.graded_results = []
 
@@ -647,18 +697,18 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 
                 scores_summary = f"Gemini 3.6 Flash: {g_score} | GPT-4o Mini: {o_score} | Claude Sonnet: {c_score}"
 
-                save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, total_rubric_scale)
+                save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, scale_val)
 
                 report_text = f"""================================================================================
 İSTEK SCHOOLS AUTOMATED ENGLISH GRADING REPORT
 ================================================================================
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
-Final Consensus Score: {final_score} / {total_rubric_scale}
+Final Consensus Score: {final_score} / {scale_val}
 Model Scores Summary: {scores_summary}
 ================================================================================
 Target Question / Prompt:
-{active_question}
+{active_q}
 
 Transcribed Text:
 {transcribed_text}
@@ -677,7 +727,7 @@ Feedback:
                     "file_bytes": file_bytes,
                     "mime_type": mime_type,
                     "final_score": final_score,
-                    "total_scale": total_rubric_scale,
+                    "total_scale": scale_val,
                     "word_count": word_count,
                     "scores": [g_score, o_score, c_score],
                     "res_g": res_g,
@@ -685,7 +735,7 @@ Feedback:
                     "res_c": res_c,
                     "report_bytes": report_bytes,
                     "report_fn": report_fn,
-                    "question": active_question
+                    "question": active_q
                 })
 
         if st.session_state.graded_results:
