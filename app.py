@@ -22,6 +22,24 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+# --- GOOGLE AUTH HELPER ---
+def get_google_credentials():
+    """Retrieve Google OAuth2 Service Account Credentials from Streamlit secrets."""
+    try:
+        from google.oauth2.service_account import Credentials
+
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        if "gcp_service_account" in st.secrets:
+            return Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"], scopes=scopes
+            )
+    except Exception as e:
+        st.error(f"Error initializing Google credentials: {e}")
+    return None
+
 # --- SECRETS HELPER ---
 def get_secret(key_name):
     """Fetches secrets safely from Streamlit secrets or OS environment."""
@@ -46,11 +64,28 @@ def log_user_login(user_name, user_email):
     except Exception as e:
         print(f"Login Tracking Error: {e}")
 
-# --- TRIGGER LOGIN TRACKING ---
-# IMPORTANT: Put this AFTER check_authentication() defines USER_NAME and USER_EMAIL
-if "user_session_logged" not in st.session_state and 'USER_NAME' in locals():
-    st.session_state.user_session_logged = True
-    log_user_login(USER_NAME, USER_EMAIL)
+# --- INITIALIZE GOOGLE AUTH & CLIENT ---
+creds = get_google_credentials()
+client = None
+
+if creds:
+    try:
+        import gspread
+
+        client = gspread.authorize(creds)
+        sheet_id = get_secret("SHEET_ID")
+
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).worksheet("Logins")
+        else:
+            sheet = client.open("İstek_Schools_Grading_Database").worksheet(
+                "Logins"
+            )
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now_str, USER_NAME, USER_EMAIL])
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Could not log login session: {str(e)}")
 
 # --- CONFIGURATION ---
 DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
