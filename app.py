@@ -61,31 +61,44 @@ st.markdown("---")
 
 # --- GOOGLE AUTHENTICATION SECURITY GATE ---
 def check_authentication():
-    # 1. If not logged in at all, show the Google Sign-in button
-    if not st.user.is_logged_in:
+    # Safe check for login status to prevent AttributeError crashes
+    is_logged_in = False
+    try:
+        is_logged_in = getattr(st.user, "is_logged_in", False)
+    except Exception:
+        is_logged_in = False
+
+    # 1. If not logged in, prompt user to log in
+    if not is_logged_in:
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
         st.markdown("Please log in with your **@istek.edu.tr** account to access the grading portal.")
         if st.button("Log in with Google", type="primary", use_container_width=True):
             st.login("google")
-        st.stop() # Stop loading the rest of the app
+        st.stop()
 
-    # 2. If logged in, verify the email domain
-    user_email = getattr(st.user, "email", "")
+    # 2. Extract email safely
+    user_email = ""
+    try:
+        user_email = getattr(st.user, "email", "") or st.user.get("email", "")
+    except Exception:
+        user_email = ""
+
+    # 3. Enforce strict @istek.edu.tr domain policy
     if not user_email.endswith("@istek.edu.tr"):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
-        st.markdown("You must use a valid İSTEK Schools email address to access this tool.")
+        st.markdown("You must use an official İSTEK Schools email address to access this tool.")
         if st.button("Sign out and try another account", type="primary", use_container_width=True):
             st.logout()
-        st.stop() # Stop loading the rest of the app if domain is wrong
+        st.stop()
 
-    # 3. If passed, show a small welcome and logout button in the sidebar
+    # 4. Display status in sidebar once verified
     with st.sidebar:
         st.success("✅ Authenticated")
         st.markdown(f"**Logged in as:**\n{user_email}")
         if st.button("Log out"):
             st.logout()
 
-# Run the security check FIRST
+# Run auth check FIRST
 check_authentication()
 
 
