@@ -4,7 +4,6 @@ import os
 import re
 import json
 import datetime
-from zoneinfo import ZoneInfo
 import base64
 import concurrent.futures
 from io import BytesIO
@@ -18,9 +17,6 @@ import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-
-# --- TIMEZONE CONFIGURATION ---
-ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
 
 # --- GOOGLE RESOURCE IDs ---
 DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
@@ -86,15 +82,6 @@ div[data-testid="stButton"] > button {
 [data-testid="stIcon"], i, [class*="Material"] {
     font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
 }
-
-/* Live Clock Badge Styling */
-.live-clock-badge {
-    font-family: 'Inter', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 500;
-    opacity: 0.85;
-    margin-top: 4px;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,7 +107,7 @@ def extract_user_identity():
 
     return user_email, user_name or "Teacher User"
 
-# --- UI HEADER & LIVE ISTANBUL CLOCK ---
+# --- UI HEADER & DYNAMIC USER-ADAPTIVE CLOCK ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 with col_logo:
     try:
@@ -132,15 +119,16 @@ with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
     
-    # Real-time ticking JavaScript clock anchored to Europe/Istanbul timezone
+    # Real-time clock adapting dynamically to user browser timezone
     st.components.v1.html("""
     <div id="clock" style="font-family: 'Inter', system-ui, sans-serif; font-size: 0.9rem; font-weight: 600; color: #707070;">
-      📍 Loading Istanbul Time...
+      🌐 Detecting your local time...
     </div>
     <script>
-    function updateIstanbulClock() {
+    function updateAdaptiveClock() {
+        const userTZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
         const options = { 
-            timeZone: 'Europe/Istanbul', 
+            timeZone: userTZ, 
             year: 'numeric', 
             month: 'long', 
             day: 'numeric', 
@@ -150,10 +138,10 @@ with col_title:
             hour12: false 
         };
         const formatter = new Intl.DateTimeFormat('en-US', options);
-        document.getElementById('clock').innerHTML = '🇹🇷 <b>Istanbul Local Time:</b> ' + formatter.format(new Date());
+        document.getElementById('clock').innerHTML = '🌐 <b>Local Time (' + userTZ + '):</b> ' + formatter.format(new Date());
     }
-    setInterval(updateIstanbulClock, 1000);
-    updateIstanbulClock();
+    setInterval(updateAdaptiveClock, 1000);
+    updateAdaptiveClock();
     </script>
     """, height=35)
 
@@ -184,13 +172,11 @@ def check_authentication():
         st.stop()
 
     is_admin = user_email in ADMIN_EMAILS
-    now_ist = datetime.datetime.now(ISTANBUL_TZ)
 
     with st.sidebar:
         st.markdown(f"### 👤 **User Profile**")
         st.markdown(f"**Name:** {user_name}")
         st.markdown(f"**Email:** `{user_email}`")
-        st.caption(f"🕒 **Session Start (IST):** {now_ist.strftime('%H:%M:%S')}")
         st.divider()
 
         if is_admin:
@@ -241,17 +227,57 @@ def get_google_sheet():
 def save_grade(teacher_name, teacher_email, student, assignment, score, word_count):
     try:
         sheet = get_google_sheet()
-        now_ist = datetime.datetime.now(ISTANBUL_TZ)
-        date_stamp = now_ist.strftime("%Y-%m-%d")
-        time_stamp = now_ist.strftime("%H:%M:%S")
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        date_stamp = now_utc.strftime("%Y-%m-%d")
+        time_stamp = now_utc.strftime("%H:%M:%S UTC")
         sheet.append_row([date_stamp, time_stamp, teacher_name, teacher_email, student, assignment, score, word_count])
     except Exception:
         pass 
 
 def get_file_mime_type(file_name):
     ext = file_name.split('.')[-1].lower()
-    mapping = {'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}
+    mapping = {'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp', 'txt': 'text/plain'}
     return mapping.get(ext, 'application/pdf')
+
+def generate_report_content(student_id, assignment, teacher_name, teacher_email, final_score, g_score, o_score, c_score, gemini_text, gpt_text, claude_text):
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report = f"""================================================================================
+İSTEK SCHOOLS AUTOMATED ENGLISH GRADING REPORT
+================================================================================
+Student Identifier : {student_id}
+Assignment Type    : {assignment}
+Evaluated By       : {teacher_name} ({teacher_email})
+Date & Time        : {now_str}
+--------------------------------------------------------------------------------
+FINAL COMPOSITE SCORE: {final_score} / 100
+--------------------------------------------------------------------------------
+MODEL CONSENSUS BREAKDOWN:
+- Gemini 3.1 Pro Score : {g_score}
+- GPT-4o Score         : {o_score}
+- Claude 3.5 Sonnet    : {c_score}
+================================================================================
+
+1. GEMINI EVALUATION REPORT
+--------------------------------------------------------------------------------
+{gemini_text.split("DATA_ROW:")[0].strip()}
+
+================================================================================
+
+2. GPT-4O EVALUATION REPORT
+--------------------------------------------------------------------------------
+{gpt_text.split("DATA_ROW:")[0].strip()}
+
+================================================================================
+
+3. CLAUDE 3.5 SONNET EVALUATION REPORT
+--------------------------------------------------------------------------------
+{claude_text.split("DATA_ROW:")[0].strip()}
+
+================================================================================
+Report automatically compiled by Mark My Words Grader.
+================================================================================
+"""
+    return report
 
 # --- INDIVIDUAL MODEL API EXECUTORS ---
 def run_gemini(client, prompt, file_bytes, mime_type):
@@ -408,6 +434,7 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
         file_bytes = file.getvalue()
         mime_type = get_file_mime_type(file.name)
         
+        # Save raw paper to Drive
         upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
         
         with st.spinner(f"🚀 Running Parallel Tri-Model Consensus on {file.name}..."):
@@ -467,15 +494,34 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
 
             save_grade(USER_NAME, USER_EMAIL, student_identifier, assignment_type, final_score, word_count)
 
-            now_ist_str = datetime.datetime.now(ISTANBUL_TZ).strftime('%Y-%m-%d at %H:%M:%S (TRT)')
+            # Generate Report File
+            report_str = generate_report_content(
+                student_identifier, assignment_type, USER_NAME, USER_EMAIL, 
+                final_score, gemini_score, gpt_score, claude_score, 
+                gemini_text, gpt_text, claude_text
+            )
+            report_bytes = report_str.encode("utf-8")
+            report_filename = f"Report_{student_identifier}.txt"
+
+            # Upload generated report to Google Drive
+            upload_file_to_drive(report_bytes, report_filename, DRIVE_FOLDER_ID, "text/plain")
 
             with st.expander(f"✅ Graded: {student_identifier} | Final Score: {final_score}", expanded=True):
-                st.caption(f"Evaluated by: **{USER_NAME}** (`{USER_EMAIL}`) on {now_ist_str}")
+                st.caption(f"Evaluated by: **{USER_NAME}** (`{USER_EMAIL}`)")
+                
+                # Direct Report Download Button for Teacher
+                st.download_button(
+                    label=f"📥 Download Report File ({report_filename})",
+                    data=report_bytes,
+                    file_name=report_filename,
+                    mime="text/plain",
+                    use_container_width=True
+                )
                 
                 if score_diff >= 10:
                     st.warning(f"⚠️ **High Discrepancy Alert:** Models differed by {score_diff} pts. Manual review advised.")
                 else:
-                    st.success(f"Models in agreement (Max Difference: {score_diff} pts).")
+                    st.success(f"Models in agreement (Max Difference: {score_diff} pts). Report uploaded to Drive!")
 
                 st.markdown(f"**Gemini 3.1 Pro:** {gemini_score} | **GPT-4o:** {gpt_score} | **Claude 3.5 Sonnet:** {claude_score}")
                 st.divider()
