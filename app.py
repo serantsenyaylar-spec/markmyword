@@ -107,6 +107,9 @@ if "auth_user" not in st.session_state:
 if "preset_template" not in st.session_state:
     st.session_state.preset_template = "Guided Essay Writing (120–150 words)"
 
+if "demo_loaded" not in st.session_state:
+    st.session_state.demo_loaded = False
+
 # --- USER IDENTITY EXTRACTION ---
 def extract_user_identity():
     user_email, user_name = "", ""
@@ -520,25 +523,31 @@ with wizard_tab2:
         uploaded_files = st.file_uploader("Upload Student Work (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
     with col_up2:
         st.markdown("**Test Drive App**")
-        run_demo = st.button("🧪 Load Sample Paper", help="Injects a sample B1 student essay to test the tri-model workflow immediately.")
+        if st.button("🧪 Load Sample Paper", help="Injects a sample B1 student essay to test the tri-model workflow immediately."):
+            st.session_state.demo_loaded = True
 
-    if run_demo:
+    # State management for active files
+    active_files = []
+    if uploaded_files:
+        st.session_state.demo_loaded = False
+        active_files = uploaded_files
+    elif st.session_state.demo_loaded:
         sample_filename = "Sample_Student_9999.txt"
         sample_content = """Technology has completely changed how students communicate today. In the past, students called each other on landline phones or talked in person after class. Now, apps like WhatsApp and Google Classroom allow us to exchange study notes and work on group projects instantly.
 
 For example, when our English teacher assigned a group presentation last week, we created a group chat immediately. We shared links, edited slides together, and solved questions late in the evening. However, social media can sometimes distract us during study sessions. Overall, modern technology makes academic collaboration faster and more convenient for everyone."""
         
         sample_bytes = sample_content.encode("utf-8")
-        uploaded_files = [type('UploadedDemoFile', (object,), {
+        active_files = [type('UploadedDemoFile', (object,), {
             'name': sample_filename,
             'getvalue': lambda self=None: sample_bytes
         })()]
         st.info("🧪 **Sample Student Essay Loaded!** Click **Evaluate Submissions** below.")
 
-    if uploaded_files:
+    if active_files:
         st.markdown("##### 📋 Pre-Flight Submission Inspection")
         file_table_data = []
-        for index, file_obj in enumerate(uploaded_files, start=1):
+        for index, file_obj in enumerate(active_files, start=1):
             file_bytes = file_obj.getvalue()
             size_kb = round(len(file_bytes) / 1024, 1)
             student_id = os.path.splitext(file_obj.name)[0]
@@ -566,15 +575,15 @@ For example, when our English teacher assigned a group presentation last week, w
     st.markdown("<br>", unsafe_allow_html=True)
     
     if st.button("🚀 Evaluate Submissions", type="primary", use_container_width=True):
-        if not uploaded_files:
-            st.error("Please upload at least one student paper or load a sample paper.")
+        if not active_files:
+            st.error("Please upload at least one student paper or click 'Load Sample Paper'.")
             st.stop()
             
         if not IS_ADMIN:
-            if len(uploaded_files) > MAX_FILES_PER_BATCH:
+            if len(active_files) > MAX_FILES_PER_BATCH:
                 st.error(f"⚠️ Batch Limit Exceeded: Max {MAX_FILES_PER_BATCH} files.")
                 st.stop()
-            if st.session_state.graded_count + len(uploaded_files) > MAX_PAPERS_PER_SESSION:
+            if st.session_state.graded_count + len(active_files) > MAX_PAPERS_PER_SESSION:
                 st.error(f"🛑 Session Limit Exceeded: Max {MAX_PAPERS_PER_SESSION} evaluations.")
                 st.stop()
 
@@ -597,7 +606,7 @@ Check if submission contains legible handwritten/typed English work answering th
 
         st.session_state.graded_results = []
 
-        for file in uploaded_files:
+        for file in active_files:
             student_id = os.path.splitext(file.name)[0]
             file_bytes = file.getvalue()
             mime_type = mimetypes.guess_type(file.name)[0] or ("text/plain" if file.name.endswith(".txt") else "application/pdf")
