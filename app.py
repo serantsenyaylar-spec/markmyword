@@ -173,14 +173,15 @@ html, body, .stApp { font-family: 'Inter', sans-serif !important; }
                 acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
                 words = html.escape(str(item['word_count']))
 
-                st.markdown(f"""
-                <div class="chip-container">
-                    <span class="chip">&#127919; Task Achievement: {task_ach}</span>
-                    <span class="chip">&#129513; Organization: {org}</span>
-                    <span class="chip">&#9997;&#65039; Accuracy: {acc}</span>
-                    <span class="chip">&#128207; Words: {words}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="chip-container">'
+                    f'<span class="chip">&#127919; Task Achievement: {task_ach}</span>'
+                    f'<span class="chip">&#129513; Organization: {org}</span>'
+                    f'<span class="chip">&#9997;&#65039; Accuracy: {acc}</span>'
+                    f'<span class="chip">&#128207; Words: {words}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
                 
 /* Category Chip Styling */
 .chip-container { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
