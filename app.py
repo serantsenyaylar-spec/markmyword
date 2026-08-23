@@ -29,6 +29,39 @@ def get_secret(key_name):
         return st.secrets[key_name]
     return os.environ.get(key_name, None)
 
+from datetime import datetime
+
+def log_user_login(user_name, user_email):
+    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        
+        if "gcp_service_account" not in st.secrets:
+            return None
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        client = gspread.authorize(creds)
+        
+        # Open your main database, but target a specific tab named "Logins"
+        sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+        
+        # Get current time
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Append to the sheet
+        sheet.append_row([timestamp, user_name, user_email])
+        
+    except Exception as e:
+        print(f"Login Tracking Error: {e}")
+
+# Assuming you have a login check at the top of your app:
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = True
+    # Log them into the database on their first session load
+    log_user_login(USER_NAME, USER_EMAIL)
+
 # --- CONFIGURATION ---
 DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
 SHEET_ID = get_secret("SHEET_ID")
@@ -820,6 +853,38 @@ with wizard_tab3:
                     st.warning(item["corrections"])
                     st.markdown(f"**Detailed Feedback:**\n{p_res.get('feedback', 'N/A')}")
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain")
+                    
+                    # Define who gets to see the admin panel
+ADMIN_EMAILS = ["admin@istek.k12.tr", "your.email@istek.k12.tr"]
+
+# Only show this section if the current user is an admin
+if USER_EMAIL in ADMIN_EMAILS:
+    st.divider()
+    st.markdown("### 🔐 Admin Control Panel")
+    
+    with st.expander("👀 View Recent Teacher Logins", expanded=False):
+        if st.button("🔄 Refresh Login Logs"):
+            try:
+                import gspread
+                from google.oauth2.service_account import Credentials
+                
+                scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+                creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+                client = gspread.authorize(creds)
+                
+                # Fetch all login data
+                sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+                records = sheet.get_all_records() # Assumes row 1 has headers: Timestamp, Name, Email
+                
+                if records:
+                    # Convert to pandas dataframe and reverse it so newest is on top
+                    df_logs = pd.DataFrame(records).iloc[::-1]
+                    st.dataframe(df_logs, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No logins recorded yet.")
+                    
+            except Exception as e:
+                st.error(f"Could not load logs: {e}")
 
 # --- FOOTER ---
 st.markdown("""
