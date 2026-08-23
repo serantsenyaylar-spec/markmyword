@@ -700,3 +700,12 @@ with wizard_tab3:
                     with t1: st.json(item['res_g'])
                     with t2: st.json(item['res_o'])
                     with t3: st.json(item['res_c'])
+# --- FOOTER & COPYRIGHT ---
+st.markdown("""
+    <hr>
+    <div style='text-align: center; color: gray; font-size: 0.85rem;'>
+        <p><b>Mark My Words - Automated English Grader</b></p>
+        <p>&copy; 2026 Serant Şenyaylar. All rights reserved.</p>
+        <p style='font-size: 0.75rem;'>Created for İSTEK Schools.</p>
+    </div>
+""", unsafe_allow_html=True)
