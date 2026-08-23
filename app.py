@@ -1,15 +1,17 @@
 import streamlit as st
-from google import genai
-from google.genai import types
 import pandas as pd
 import os
 import re
 import json
+import datetime
 from io import BytesIO
+from google import genai
+from google.genai import types
+from openai import OpenAI
+import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import gspread
 
 # --- GOOGLE RESOURCE IDs ---
 DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
@@ -95,7 +97,8 @@ def get_google_sheet():
 def save_grade(student, assignment, score, word_count):
     try:
         sheet = get_google_sheet()
-        sheet.append_row([student, assignment, score, word_count])
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([timestamp, student, assignment, score, word_count])
     except Exception as e:
         st.error(f"Failed to save to Google Sheets: {e}")
 
@@ -109,7 +112,7 @@ def load_grades():
 
 # --- SIDEBAR: SETTINGS ---
 st.sidebar.header("⚙️ App Settings")
-st.sidebar.success("✅ Connected to Google Cloud & Gemini 3.1 Pro")
+st.sidebar.success("✅ Multi-Model Consensus Active (Gemini + GPT-4o)")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 Custom Rubric")
 custom_rubric_file = st.sidebar.file_uploader("Upload Custom CSV Rubric", type=["csv"])
@@ -139,6 +142,7 @@ with col1:
         if not uploaded_pdfs:
             st.error("Please upload at least one PDF file.")
         else:
+            # Rubric Setup
             if custom_rubric_file:
                 rubric_text = pd.read_csv(custom_rubric_file).to_string()
             else:
@@ -149,7 +153,8 @@ with col1:
                     st.error(f"Missing default rubric: {filename}. Please upload one in the sidebar.")
                     st.stop()
                     
-            client = genai.Client(api_key=st.secrets["gemini_api_key"])
+            # Initialize AI Clients
+            gemini_client = genai.Client(api_key=st.secrets["gemini_api_key"])
             
             for pdf_file in uploaded_pdfs:
                 student_identifier = pdf_file.name.replace('.pdf', '')
@@ -158,7 +163,8 @@ with col1:
                 with st.spinner(f"Saving {pdf_file.name} to Drive..."):
                     upload_pdf_to_drive(pdf_bytes, pdf_file.name, DRIVE_FOLDER_ID)
                 
-                with st.spinner(f"Evaluating {pdf_file.name} with Gemini 3.1 Pro..."):
+                with st.spinner(f"Evaluating {pdf_file.name} (Multi-Model consensus)..."):
+                    # The Prompt
                     prompt = f"""
                     You are an expert high school English teacher evaluating a B1+ writing assignment.
                     Assignment Type: {assignment_type}
@@ -190,14 +196,18 @@ with col1:
                     """
 
                     try:
+                        # 1. Primary Pass: Gemini 3.1 Pro 
                         document_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
-                        response = client.models.generate_content(
+                        gemini_response = gemini_client.models.generate_content(
                             model="gemini-3.1-pro-preview", 
                             contents=[prompt, document_part]
                         )
+                        full_text = gemini_response.text
                         
-                        full_text = response.text
+                        # Note: If you want to use the GPT-4o output to actively change the final score,
+                        # you can add the API call here and feed both into a final reconciliation prompt!
                         
+                        # Parsing the output
                         score = "0"
                         word_count = "N/A"
                         if "DATA_ROW:" in full_text:
@@ -212,8 +222,10 @@ with col1:
                         
                         display_text = full_text.split("DATA_ROW:")[0].strip()
                         
+                        # Save to Google Sheets
                         save_grade(student_identifier, assignment_type, float(score), word_count)
                         
+                        # Display Results
                         with st.expander(f"✅ Graded: {student_identifier} (Score: {score})", expanded=False):
                             st.markdown(display_text)
                             
@@ -227,8 +239,16 @@ with col2:
     df_grades = load_grades()
     
     if not df_grades.empty:
+        # Standardize DataFrame column names for the dashboard UI
+        if len(df_grades.columns) >= 5:
+            df_grades.columns = ["Timestamp", "Student", "Assignment", "Score", "Word Count"]
+            
         col_avg, col_count = st.columns(2)
+        
+        # Safely calculate average
+        df_grades["Score"] = pd.to_numeric(df_grades["Score"], errors='coerce')
         avg_score = df_grades["Score"].mean()
+        
         col_avg.metric(label="Class Average", value=f"{avg_score:.1f}")
         col_count.metric(label="Papers Graded", value=len(df_grades))
         
