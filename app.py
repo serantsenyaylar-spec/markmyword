@@ -165,75 +165,16 @@ def check_authentication():
 
         st.divider()
 
-        # --- NEW WORKSPACE LINKS SECTION ---
+       # --- WORKSPACE LINKS SECTION ---
         st.markdown("### 📁 **Workspace Links**")
-        if DRIVE_FOLDER_ID:
-            st.markdown(f"☁️ [**Google Drive Reports**](https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID})")
-        if SHEET_ID:
-            st.markdown(f"📊 [**Google Sheets Gradebook**](https://docs.google.com/spreadsheets/d/{SHEET_ID})")
-        
-        if not DRIVE_FOLDER_ID and not SHEET_ID:
-            st.caption("No Workspace links configured.")
+        st.markdown("☁️ [**Google Drive**](https://drive.google.com)")
+        st.markdown("📧 [**Gmail**](https://mail.google.com)")
+        st.markdown("📅 [**Google Calendar**](https://calendar.google.com)")
+        st.markdown("📄 [**Google Docs**](https://docs.google.com/document/)")
+        st.markdown("📊 [**Google Sheets**](https://docs.google.com/spreadsheets/)")
+        st.markdown("📈 [**Apple Numbers**](https://www.icloud.com/numbers/)")
             
         st.divider()
-
-        with st.expander("🛠️ **System Diagnostics**", expanded=False):
-            gemini_ok = "gemini_api_key" in st.secrets
-            openai_ok = "openai_api_key" in st.secrets
-            anthropic_ok = "anthropic_api_key" in st.secrets
-            creds_ok = "google_credentials" in st.secrets
-
-            st.write("• **Gemini API:**", "🟢 Connected" if gemini_ok else "🔴 Missing Secret")
-            st.write("• **OpenAI API:**", "🟢 Connected" if openai_ok else "🔴 Missing Secret")
-            st.write("• **Claude API:**", "🟢 Connected" if anthropic_ok else "🔴 Missing Secret")
-            st.write("• **Google Workspace:**", "🟢 Connected" if creds_ok else "⚠️ Unlinked")
-
-        st.divider()
-        if st.button("Log out", use_container_width=True):
-            st.session_state.auth_user = None
-            st.logout()
-
-    return is_admin, user_email, user_name
-    
-# ADD THIS LINE RIGHT HERE:
-IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
-
-# --- GOOGLE WORKSPACE INTEGRATION ---
-def get_google_credentials():
-    if "google_credentials" not in st.secrets: return None
-    creds_secret = st.secrets["google_credentials"]
-    creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
-    scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
-    return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
-
-def upload_file_to_drive(file_bytes, file_name, folder_id, mime_type):
-    try:
-        creds = get_google_credentials()
-        if not creds or not folder_id: return False
-        service = build('drive', 'v3', credentials=creds)
-        file_metadata = {'name': file_name, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(BytesIO(file_bytes), mimetype=mime_type, resumable=True)
-        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        return True
-    except Exception: return False
-
-def get_google_sheet():
-    creds = get_google_credentials()
-    if not creds or not SHEET_ID: return None
-    client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).sheet1
-
-def save_grade(teacher_name, teacher_email, student, assignment, score, word_count, total_scale):
-    try:
-        sheet = get_google_sheet()
-        if not sheet: return
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        sheet.append_row([
-            now_utc.strftime("%Y-%m-%d"), 
-            now_utc.strftime("%H:%M:%S UTC"), 
-            teacher_name, teacher_email, student, assignment, f"{score}/{total_scale}", word_count
-        ])
-    except Exception: pass 
 
 # --- PARSING & SCORE DETECTOR ---
 def parse_json_response(raw_text):
