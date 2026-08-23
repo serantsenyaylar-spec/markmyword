@@ -105,8 +105,7 @@ with col_title:
 
 # --- SIDEBAR: SETTINGS ---
 st.sidebar.header("⚙️ Settings")
-api_key = st.sidebar.text_input("Enter Gemini API Key:", value="YOUR_ACTUAL_API_KEY", type="password")
-
+api_key = st.sidebar.text_input("Enter Gemini API Key:", value="", type="password")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 Custom Rubric")
 custom_rubric_file = st.sidebar.file_uploader("Upload a Custom CSV Rubric (Optional)", type=["csv"])
