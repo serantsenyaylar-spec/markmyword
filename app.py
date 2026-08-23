@@ -155,7 +155,7 @@ def check_authentication():
             st.logout()
         st.stop()
 
-   with st.sidebar:
+    with st.sidebar:
         # 1. Connection Status Badge
         st.markdown("""
         <div style="background-color: rgba(40, 167, 69, 0.12); border: 1px solid #28a745; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
@@ -212,6 +212,7 @@ def check_authentication():
         if st.button("Log out", use_container_width=True):
             st.session_state.auth_user = None
             st.logout()
+
 
     return is_admin, user_email, user_name
 
