@@ -165,27 +165,13 @@ def check_authentication():
 
         st.divider()
 
-        # --- GOOGLE WORKSPACE LINKS ---
-        st.markdown("### 📁 **Workspace Links**")
-        if DRIVE_FOLDER_ID:
-            st.markdown(f"☁️ [Open Google Drive Folder](https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID})")
-        else:
-            st.caption("⚠️ Drive Folder ID not configured")
-            
-        if SHEET_ID:
-            st.markdown(f"📊 [Open Grades Google Sheet](https://docs.google.com/spreadsheets/d/{SHEET_ID})")
-        else:
-            st.caption("⚠️ Google Sheet ID not configured")
-
-        st.divider()
-
         with st.expander("🛠️ **System Diagnostics**", expanded=False):
             gemini_ok = "gemini_api_key" in st.secrets
             openai_ok = "openai_api_key" in st.secrets
             anthropic_ok = "anthropic_api_key" in st.secrets
             creds_ok = "google_credentials" in st.secrets
 
-            st.write("• **Gemini 3.6 API:**", "🟢 Connected" if gemini_ok else "🔴 Missing Secret")
+            st.write("• **Gemini API:**", "🟢 Connected" if gemini_ok else "🔴 Missing Secret")
             st.write("• **OpenAI API:**", "🟢 Connected" if openai_ok else "🔴 Missing Secret")
             st.write("• **Claude API:**", "🟢 Connected" if anthropic_ok else "🔴 Missing Secret")
             st.write("• **Google Workspace:**", "🟢 Connected" if creds_ok else "⚠️ Unlinked")
@@ -288,7 +274,7 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
 }"""
 
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
-    candidate_models = ["gemini-3.6-flash", "gemini-2.5-flash"]
+    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash"]
     last_err = ""
     for model_name in candidate_models:
         for attempt in range(4):
@@ -592,7 +578,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                     res_o = f_gpt.result()
                     res_c = f_claude.result()
 
-                all_responses = {"Gemini 3.6 Flash": res_g, "GPT-4o Mini": res_o, "Claude Sonnet": res_c}
+                all_responses = {"Gemini 2.5 Flash": res_g, "GPT-4o Mini": res_o, "Claude Sonnet": res_c}
                 valid_results = {name: r for name, r in all_responses.items() if check_validity(r)}
                 
                 if not valid_results:
@@ -698,12 +684,12 @@ with wizard_tab3:
                     st.markdown("#### 🎯 Evaluation Breakdown")
                     st.markdown(f"**Target Question:** *\"{item.get('question', 'N/A')}\"*")
                     st.markdown(f"**Final Score:** `{item['final_score']} / {scale_val}` | **Word Count:** `{item['word_count']}`")
-                    st.markdown(f"**Gemini 3.6 Flash:** {item['scores'][0]} | **GPT-4o Mini:** {item['scores'][1]} | **Claude Sonnet:** {item['scores'][2]}")
+                    st.markdown(f"**Gemini 2.5 Flash:** {item['scores'][0]} | **GPT-4o Mini:** {item['scores'][1]} | **Claude Sonnet:** {item['scores'][2]}")
 
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini 3.6 Flash", "🧠 GPT-4o Mini", "🦉 Claude Sonnet"])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini 2.5 Flash", "🧠 GPT-4o Mini", "🦉 Claude Sonnet"])
                     with t1: st.json(item['res_g'])
                     with t2: st.json(item['res_o'])
                     with t3: st.json(item['res_c'])
