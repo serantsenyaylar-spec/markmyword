@@ -96,13 +96,17 @@ div[data-testid="stButton"] > button {
 </style>
 """, unsafe_allow_html=True)
 
+# --- SESSION STATE INITIALIZATION FOR STICKY AUTH & RESULTS ---
 if "graded_count" not in st.session_state:
     st.session_state.graded_count = 0
 
 if "graded_results" not in st.session_state:
     st.session_state.graded_results = []
 
-# --- USER IDENTITY EXTRACTION ---
+if "auth_user" not in st.session_state:
+    st.session_state.auth_user = None
+
+# --- USER IDENTITY EXTRACTION WITH PERSISTENT FALLBACK ---
 def extract_user_identity():
     user_email, user_name = "", ""
     try:
@@ -115,6 +119,13 @@ def extract_user_identity():
         name_part = user_email.split("@")[0]
         tokens = name_part.split(".")
         user_name = " ".join([t.capitalize() for t in tokens])
+
+    # Cache credentials into session state for persistent navigation
+    if user_email:
+        st.session_state.auth_user = {"email": user_email, "name": user_name or "Teacher User"}
+    elif st.session_state.auth_user:
+        user_email = st.session_state.auth_user.get("email", "")
+        user_name = st.session_state.auth_user.get("name", "")
 
     return user_email, user_name or "Teacher User"
 
@@ -151,11 +162,12 @@ with col_title:
 
 st.markdown("---")
 
-# --- AUTHENTICATION & ROLE MANAGEMENT ---
+# --- AUTHENTICATION & ROLE MANAGEMENT (PERSISTENT LOGINS) ---
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
 
-    if not is_logged_in:
+    # Allow persistence if cached session exists
+    if not is_logged_in and not st.session_state.auth_user:
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
         st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the portal.")
         if st.button("Log in with Google", type="primary", use_container_width=True):
@@ -172,12 +184,13 @@ def check_authentication():
     if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
         if st.button("Sign out and try another account", type="primary", use_container_width=True):
+            st.session_state.auth_user = None
             st.logout()
         st.stop()
 
     with st.sidebar:
         safe_name = html.escape(user_name)
-        safe_email = html.escape(user_email or 'GitHub Verified')
+        safe_email = html.escape(user_email or 'Verified User')
         
         st.markdown("### 👤 **Account Details**")
         st.markdown(f"""
@@ -214,6 +227,7 @@ def check_authentication():
 
         st.divider()
         if st.button("Log out", use_container_width=True):
+            st.session_state.auth_user = None
             st.logout()
 
     return is_admin, user_email, user_name
