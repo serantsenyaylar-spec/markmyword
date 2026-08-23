@@ -23,10 +23,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # --- SYSTEM CONFIGURATION ---
-# Removed hardcoded sensitive IDs and emails from fallbacks for security.
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 SHEET_ID = st.secrets.get("SHEET_ID", "")
-ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", [])
+# Added specific email for Admin access
+ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr"])
 ALLOWED_DOMAIN = "@istek.k12.tr"
 
 MAX_FILES_PER_BATCH = 5
