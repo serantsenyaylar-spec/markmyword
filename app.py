@@ -8,6 +8,7 @@ import html
 import mimetypes
 import zipfile
 import io
+import time
 import concurrent.futures
 from io import BytesIO
 
@@ -320,26 +321,40 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
-# Advanced Free Tier Option: gemini-3.7-flash
+# Robust Gemini runner with Exponential Backoff & Model Cascade
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
-    try:
-        if mime_type.startswith("text/"):
-            text_str = file_bytes.decode("utf-8", errors="ignore")
-            contents = [SYSTEM_PROMPT, f"{user_prompt}\n\nStudent Essay File:\n{text_str}"]
-        else:
-            doc_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-            contents = [SYSTEM_PROMPT, user_prompt, doc_part]
+    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-3.7-flash"]
+    last_err = ""
 
-        response = client.models.generate_content(
-            model="gemini-3.7-flash", 
-            contents=contents,
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        return json.loads(response.text)
-    except Exception as e:
-        return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {str(e)}", "total_score": 0, "word_count": 0}
+    for model_name in candidate_models:
+        for attempt in range(3):  # Try up to 3 times per model for 503 transient errors
+            try:
+                if mime_type.startswith("text/"):
+                    text_str = file_bytes.decode("utf-8", errors="ignore")
+                    contents = [SYSTEM_PROMPT, f"{user_prompt}\n\nStudent Essay File:\n{text_str}"]
+                else:
+                    doc_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+                    contents = [SYSTEM_PROMPT, user_prompt, doc_part]
 
-# Advanced Paid Model Option: gpt-4o
+                response = client.models.generate_content(
+                    model=model_name, 
+                    contents=contents,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                res_dict = json.loads(response.text)
+                res_dict["model_used"] = model_name
+                return res_dict
+            except Exception as e:
+                err_str = str(e)
+                last_err = f"{model_name}: {err_str}"
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                    time.sleep(2 * (attempt + 1))  # Exponential backoff
+                    continue
+                else:
+                    break  # Non-retriable error, hop to next fallback model
+
+    return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
+
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
         if mime_type.startswith("text/"):
@@ -366,7 +381,6 @@ def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"GPT Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# Advanced Paid Model Option: claude-3-5-sonnet-20241022
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     try:
         if mime_type.startswith("text/"):
@@ -600,12 +614,14 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 valid_results = {name: r for name, r in all_responses.items() if check_validity(r)}
                 
                 if not valid_results:
-                    st.error(f"❌ **Evaluation Failed ({file.name}):** All AI models encountered API errors or billing quota limits.")
-                    with st.expander(f"🔍 API Billing & Error Diagnostics for `{file.name}`", expanded=True):
+                    st.error(f"❌ **Evaluation Failed ({file.name}):** All AI models failed. Check network connectivity or API key configurations.")
+                    with st.expander(f"🔍 Diagnostic Errors for `{file.name}`", expanded=True):
                         for model_name, res in all_responses.items():
-                            reason = res.get("rejection_reason", "Unknown error")
-                            st.markdown(f"**{model_name} Error:** `{reason}`")
+                            st.markdown(f"**{model_name}:** `{res.get('rejection_reason', 'Unknown error')}`")
                     continue
+
+                if len(valid_results) < 3:
+                    st.warning(f"💡 **Notice ({file.name}):** Evaluation completed using active models: `{', '.join(valid_results.keys())}`. (Other models skipped due to credit/quota limits).")
 
                 st.session_state.graded_count += 1
 
@@ -617,7 +633,11 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 transcribed_text = primary_res.get("transcribed_text", "N/A")
                 feedback = primary_res.get("feedback", "N/A")
 
-                scores_summary = f"Gemini: {res_g.get('total_score', 'Err')} | GPT-4o: {res_o.get('total_score', 'Err')} | Claude: {res_c.get('total_score', 'Err')}"
+                g_score = res_g.get("total_score", "Quota Exceeded") if check_validity(res_g) else "Skipped"
+                o_score = res_o.get("total_score", "Quota Exceeded") if check_validity(res_o) else "Skipped"
+                c_score = res_c.get("total_score", "Quota Exceeded") if check_validity(res_c) else "Skipped"
+
+                scores_summary = f"Gemini: {g_score} | GPT-4o: {o_score} | Claude: {c_score}"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, total_rubric_scale)
 
@@ -627,7 +647,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
 Final Consensus Score: {final_score} / {total_rubric_scale}
-Active Models Consensus: {scores_summary}
+Model Scores Summary: {scores_summary}
 ================================================================================
 Target Question / Prompt:
 {active_question}
@@ -651,7 +671,7 @@ Feedback:
                     "final_score": final_score,
                     "total_scale": total_rubric_scale,
                     "word_count": word_count,
-                    "scores": [res_g.get("total_score", "Err"), res_o.get("total_score", "Err"), res_c.get("total_score", "Err")],
+                    "scores": [g_score, o_score, c_score],
                     "res_g": res_g,
                     "res_o": res_o,
                     "res_c": res_c,
@@ -715,7 +735,7 @@ with wizard_tab3:
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini 3.7", "🧠 GPT-4o", "🦉 Claude 3.5"])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini", "🧠 GPT-4o", "🦉 Claude"])
                     with t1: st.json(item['res_g'])
                     with t2: st.json(item['res_o'])
                     with t3: st.json(item['res_c'])
