@@ -22,7 +22,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- PAGE SETUP (Must be the first Streamlit command) ---
+# --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
     page_icon="📝", 
@@ -30,53 +30,47 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- GOOGLE AUTH HELPER ---
-def get_google_credentials():
-    """Retrieve Google OAuth2 Service Account Credentials from Streamlit secrets."""
-    try:
-        from google.oauth2.service_account import Credentials
-
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        if "gcp_service_account" in st.secrets:
-            return Credentials.from_service_account_info(
-                st.secrets["gcp_service_account"], scopes=scopes
-            )
-    except Exception as e:
-        st.error(f"Error initializing Google credentials: {e}")
-    return None
-
-# --- USER LOGIN LOGGING ---
-def log_user_login(user_name, user_email):
-    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
-    try:
-        creds = get_google_credentials()
-        if not creds:
-            return None
-
-        client = gspread.authorize(creds)
-        sheet_id = get_secret("SHEET_ID")
-        
-        if sheet_id:
-            sheet = client.open_by_key(sheet_id).worksheet("Logins")
-        else:
-            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
-            
-        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        sheet.append_row([timestamp, user_name, user_email])
-        
-    except Exception as e:
-        print(f"Login Tracking Error: {e}")
-
-# --- SECRETS HELPER ---
+# --- SECRETS & AUTH HELPERS ---
 def get_secret(key_name):
     """Fetches secrets safely from Streamlit secrets or OS environment."""
     if hasattr(st, "secrets") and key_name in st.secrets:
         return st.secrets[key_name]
     return os.environ.get(key_name, None)
-    
+
+def get_google_credentials():
+    """Unified Google OAuth2 Service Account Credentials helper."""
+    creds_secret = get_secret("gcp_service_account") or get_secret("google_credentials")
+    if not creds_secret:
+        return None
+    try:
+        from google.oauth2.service_account import Credentials
+        creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/drive.file"
+        ]
+        return Credentials.from_service_account_info(creds_json, scopes=scopes)
+    except Exception as e:
+        print(f"Error initializing Google credentials: {e}")
+        return None
+
+# --- CONFIGURATION & CONSTANTS ---
+DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
+SHEET_ID = get_secret("SHEET_ID")
+
+raw_admins = get_secret("ADMIN_EMAILS")
+if isinstance(raw_admins, str):
+    ADMIN_EMAILS = [e.strip() for e in raw_admins.split(",") if e.strip()]
+elif isinstance(raw_admins, list):
+    ADMIN_EMAILS = raw_admins
+else:
+    ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
+
+ALLOWED_DOMAIN = "istek.k12.tr"
+MAX_FILES_PER_BATCH = 5
+MAX_PAPERS_PER_SESSION = 15
+
 # --- IDENTITY & AUTHENTICATION HELPERS ---
 def extract_user_identity():
     user_email, user_name = "", ""
@@ -97,48 +91,7 @@ def extract_user_identity():
         user_name = st.session_state.auth_user.get("name", "")
 
     return user_email, user_name or "Teacher User"
-# --- CONFIGURATION ---
-DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
-SHEET_ID = get_secret("SHEET_ID")
 
-# Safely parse ADMIN_EMAILS into a clean list whether passed as string or list
-raw_admins = get_secret("ADMIN_EMAILS")
-if isinstance(raw_admins, str):
-    ADMIN_EMAILS = [e.strip() for e in raw_admins.split(",") if e.strip()]
-elif isinstance(raw_admins, list):
-    ADMIN_EMAILS = raw_admins
-else:
-    ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
-
-# Domain matching (Cleaned without leading '@' for flexible string checking)
-ALLOWED_DOMAIN = "istek.k12.tr"
-
-# Rate & session constraints
-MAX_FILES_PER_BATCH = 5
-MAX_PAPERS_PER_SESSION = 15
-
-# --- USER LOGIN LOGGING (Lines 70–85) ---
-creds = get_google_credentials()
-client = None
-
-if creds:
-    try:
-        client = gspread.authorize(creds)
-        sheet_id = get_secret("SHEET_ID")
-        
-        # Open by ID if available, fallback to title search
-        if sheet_id:
-            sheet = client.open_by_key(sheet_id).worksheet("Logins")
-        else:
-            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
-            
-        # Record session login timestamp
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now_str, USER_NAME, USER_EMAIL])
-    except Exception as e:
-        # Fallback gracefully if database or sheet name fails to connect
-        st.sidebar.warning(f"⚠️ Could not log login session: {str(e)}")
-        
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
 
@@ -161,19 +114,82 @@ def check_authentication():
         st.stop()
 
     with st.sidebar:
-        # Sidebar layout content...
-        pass
+        st.markdown("""
+        <div style="background-color: rgba(40, 167, 69, 0.12); border: 1px solid #28a745; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
+            <span style="height: 10px; width: 10px; background-color: #28a745; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px #28a745;"></span>
+            <span style="color: #28a745; font-weight: 700; font-size: 0.85rem;">Connection: Active</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        name_parts = user_name.strip().split(" ", 1)
+        first_name = name_parts[0] if len(name_parts) > 0 else "Teacher"
+        surname = name_parts[1] if len(name_parts) > 1 else "—"
+
+        st.markdown("### 👤 **Account Details**")
+        st.markdown(f"""
+        <div class="user-card" style="background-color: var(--secondary-background-color); padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); margin-bottom: 15px;">
+            <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>First Name:</b> {html.escape(first_name)}</div>
+            <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>Surname:</b> {html.escape(surname)}</div>
+            <div style="font-size: 0.82rem; opacity: 0.85; word-break: break-all;"><b>Mail:</b> {html.escape(user_email or 'Verified User')}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if is_admin:
+            st.success("👑 **Admin Status: Active**")
+            if st.button("Reset Quota Counter", use_container_width=True):
+                st.session_state.graded_count = 0
+                st.session_state.graded_results = []
+                st.rerun()
+        else:
+            st.info(f"📊 **Session Usage:** {st.session_state.get('graded_count', 0)}/{MAX_PAPERS_PER_SESSION} papers")
+
+        st.divider()
+
+        st.markdown("### 🌐 **Workspace Links**")
+        workspace_links = [
+            {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg"},
+            {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/1/12/Google_Drive_icon_%282020%29.svg"},
+            {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/ae/Google_Sheets_2020_Logo.svg"},
+            {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://upload.wikimedia.org/wikipedia/commons/0/01/Google_Docs_2020_Logo.svg"},
+            {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg"}
+        ]
+
+        for item in workspace_links:
+            st.markdown(f"""
+            <a href="{item['url']}" target="_blank" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 6px 8px; border-radius: 6px;">
+                <img src="{item['icon']}" width="20" height="20" style="object-fit: contain;"/>
+                <span style="font-size: 0.9rem; font-weight: 500;">{item['name']}</span>
+            </a>
+            """, unsafe_allow_html=True)
+
+        st.divider()
+        if st.button("Log out", use_container_width=True):
+            st.session_state.auth_user = None
+            st.logout()
 
     return is_admin, user_email, user_name
 
-# --- EXECUTE AUTHENTICATION (MUST BE BELOW THE DEFINITIONS ABOVE) ---
-IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
+def log_user_login(user_name, user_email):
+    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
+    try:
+        creds = get_google_credentials()
+        if not creds:
+            return None
 
-# --- LOG USER LOGIN (ONCE PER SESSION) ---
-if not st.session_state.get("user_session_logged", False):
-    st.session_state.user_session_logged = True
-    log_user_login(USER_NAME, USER_EMAIL)
-    
+        client = gspread.authorize(creds)
+        sheet_id = get_secret("SHEET_ID")
+        
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).worksheet("Logins")
+        else:
+            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+            
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        sheet.append_row([timestamp, user_name, user_email])
+        
+    except Exception as e:
+        print(f"Login Tracking Error: {e}")
+
 # --- EXECUTE AUTHENTICATION ---
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
