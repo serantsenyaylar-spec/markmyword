@@ -321,13 +321,12 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
-# Robust Gemini runner with Exponential Backoff & Model Cascade
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
-    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-3.7-flash"]
+    candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"]
     last_err = ""
 
     for model_name in candidate_models:
-        for attempt in range(3):  # Try up to 3 times per model for 503 transient errors
+        for attempt in range(4):
             try:
                 if mime_type.startswith("text/"):
                     text_str = file_bytes.decode("utf-8", errors="ignore")
@@ -347,13 +346,20 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
             except Exception as e:
                 err_str = str(e)
                 last_err = f"{model_name}: {err_str}"
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                    time.sleep(2 * (attempt + 1))  # Exponential backoff
+                
+                if any(code in err_str for code in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"]):
+                    wait_time = 2 ** (attempt + 1)
+                    time.sleep(wait_time)
                     continue
                 else:
-                    break  # Non-retriable error, hop to next fallback model
+                    break
 
-    return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
+    return {
+        "is_valid_submission": False, 
+        "rejection_reason": f"Gemini Capacity Limit: {last_err}", 
+        "total_score": 0, 
+        "word_count": 0
+    }
 
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
