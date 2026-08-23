@@ -4,6 +4,10 @@ import os
 import json
 import datetime
 import base64
+import html
+import mimetypes
+import zipfile
+import io
 import concurrent.futures
 from io import BytesIO
 
@@ -31,7 +35,7 @@ MAX_PAPERS_PER_SESSION = 15
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
     page_icon="📝", 
-    layout="centered", 
+    layout="wide", 
     initial_sidebar_state="collapsed"
 )
 
@@ -169,12 +173,14 @@ def check_authentication():
         st.stop()
 
     with st.sidebar:
-        # Optimized User Profile Card
+        safe_name = html.escape(user_name)
+        safe_email = html.escape(user_email or 'GitHub Verified')
+        
         st.markdown("### 👤 **Account Details**")
         st.markdown(f"""
         <div class="user-card">
-            <div class="user-card-name">👤 {user_name}</div>
-            <div class="user-card-email">📧 {user_email or 'GitHub Verified'}</div>
+            <div class="user-card-name">👤 {safe_name}</div>
+            <div class="user-card-email">📧 {safe_email}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -330,11 +336,36 @@ def run_claude_structured(client, user_prompt, file_bytes, mime_type):
 # --- MAIN INTERFACE ---
 st.subheader("1. Assignment Details & Rubric")
 assignment_type = st.selectbox("Assignment Type", ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)"])
+
+# Load standard default rubric
+default_fn = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
+if os.path.exists(default_fn):
+    default_rubric_df = pd.read_csv(default_fn)
+else:
+    default_rubric_df = pd.DataFrame({
+        "Criteria": ["Task Achievement", "Organization", "Grammatical Accuracy"],
+        "Max Score": [35, 35, 30],
+        "Description": ["Fulfills prompt criteria", "Logical structure and paragraphs", "Correct syntax, spelling, punctuation"]
+    })
+
 rubric_source = st.radio("Rubric Source", ["Use Pre-installed Default", "Upload Custom Rubric"], horizontal=True)
 
-custom_rubric_file = None
 if rubric_source == "Upload Custom Rubric":
     custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric", type=["csv"])
+    if custom_rubric_file:
+        active_rubric_df = pd.read_csv(custom_rubric_file)
+    else:
+        active_rubric_df = default_rubric_df
+else:
+    active_rubric_df = default_rubric_df
+
+# ADMIN ONLY: Interactive Rubric Editor
+if IS_ADMIN:
+    with st.expander("👑 Admin: Live Rubric Editor", expanded=False):
+        st.info("Edit criteria, descriptors, or max scores directly in the browser before running evaluations.")
+        active_rubric_df = st.data_editor(active_rubric_df, num_rows="dynamic", use_container_width=True)
+
+raw_rubric = active_rubric_df.to_string()
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("2. Upload Student Papers")
@@ -362,12 +393,6 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
             st.error(f"🛑 Session Limit Exceeded: Max {MAX_PAPERS_PER_SESSION} evaluations.")
             st.stop()
 
-    if rubric_source == "Upload Custom Rubric" and custom_rubric_file:
-        raw_rubric = pd.read_csv(custom_rubric_file).to_string()
-    else:
-        fn = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
-        raw_rubric = pd.read_csv(fn).to_string() if os.path.exists(fn) else "Standard B1 Rubric"
-
     gemini_client = genai.Client(api_key=st.secrets["gemini_api_key"])
     openai_client = OpenAI(api_key=st.secrets["openai_api_key"])
     anthropic_client = anthropic.Anthropic(api_key=st.secrets["anthropic_api_key"])
@@ -380,13 +405,17 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
 
 Check if submission contains legible handwritten/typed English work. If invalid, set is_valid_submission to false."""
 
+    graded_results = []
+
     for file in uploaded_files:
         student_id = os.path.splitext(file.name)[0]
         file_bytes = file.getvalue()
-        mime_type = "application/pdf" if file.name.endswith(".pdf") else "image/jpeg"
+        mime_type = mimetypes.guess_type(file.name)[0] or ("application/pdf" if file.name.lower().endswith(".pdf") else "image/jpeg")
         
-        upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
-        
+        drive_success = upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
+        if not drive_success:
+            st.warning(f"⚠️ **Drive Sync Warning:** Original paper (`{file.name}`) could not be saved to Google Drive.")
+
         with st.spinner(f"🚀 Running Parallel Tri-Model Consensus on {file.name}..."):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 f_gemini = executor.submit(run_gemini_structured, gemini_client, user_prompt, file_bytes, mime_type)
@@ -426,14 +455,107 @@ Feedback:
 """
             report_bytes = report_text.encode("utf-8")
             report_fn = f"Report_{student_id}.txt"
-            upload_file_to_drive(report_bytes, report_fn, DRIVE_FOLDER_ID, "text/plain")
+            
+            report_upload_success = upload_file_to_drive(report_bytes, report_fn, DRIVE_FOLDER_ID, "text/plain")
+            if not report_upload_success:
+                st.warning(f"⚠️ **Drive Sync Warning:** Evaluation report (`{report_fn}`) could not be saved to Google Drive.")
 
-            with st.expander(f"✅ Graded: {student_id} | Final Score: {final_score}", expanded=True):
-                st.download_button(f"📥 Download Report ({report_fn})", report_bytes, report_fn, "text/plain", use_container_width=True)
-                st.markdown(f"**Gemini:** {scores[0]} | **GPT-4o:** {scores[1]} | **Claude:** {scores[2]}")
-                st.divider()
-                
-                t1, t2, t3 = st.tabs(["🤖 Gemini", "🧠 GPT-4o", "🦉 Claude"])
-                with t1: st.json(res_g)
-                with t2: st.json(res_o)
-                with t3: st.json(res_c)
+            graded_results.append({
+                "student_id": student_id,
+                "file_name": file.name,
+                "file_bytes": file_bytes,
+                "mime_type": mime_type,
+                "final_score": final_score,
+                "word_count": word_count,
+                "scores": scores,
+                "res_g": res_g,
+                "res_o": res_o,
+                "res_c": res_c,
+                "report_bytes": report_bytes,
+                "report_fn": report_fn
+            })
+
+    if graded_results:
+        st.divider()
+
+        # ADMIN ONLY: Analytics Dashboard & Class Insights
+        if IS_ADMIN:
+            st.markdown("### 📊 Admin Analytics & Class Performance")
+            all_scores = [item["final_score"] for item in graded_results]
+            avg_score = round(sum(all_scores) / len(all_scores), 1)
+            
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Class Average", f"{avg_score} / 100")
+            m2.metric("Highest Score", f"{max(all_scores)}")
+            m3.metric("Lowest Score", f"{min(all_scores)}")
+            m4.metric("Total Graded", len(all_scores))
+
+            chart_data = pd.DataFrame({
+                "Student ID": [item["student_id"] for item in graded_results],
+                "Final Score": all_scores
+            }).set_index("Student ID")
+            st.bar_chart(chart_data)
+            st.divider()
+
+        # TEACHERS & ADMIN: ZIP Batch Download Button
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for item in graded_results:
+                zip_file.writestr(item["report_fn"], item["report_bytes"])
+        zip_buffer.seek(0)
+
+        st.download_button(
+            label="📦 Download All Student Reports (ZIP Batch)",
+            data=zip_buffer.getvalue(),
+            file_name="Class_Grading_Reports.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # TEACHERS & ADMIN: Document Preview Canvas & Side-by-Side View
+        for item in graded_results:
+            with st.expander(f"✅ Graded: {item['student_id']} | Final Score: {item['final_score']}", expanded=True):
+                col_canvas, col_details = st.columns([1, 1])
+
+                # Document Canvas Preview (Left)
+                with col_canvas:
+                    st.markdown("#### 📄 Document Canvas Preview")
+                    if "image" in item["mime_type"]:
+                        st.image(item["file_bytes"], use_container_width=True)
+                    elif item["mime_type"] == "application/pdf":
+                        b64_pdf = base64.b64encode(item["file_bytes"]).decode("utf-8")
+                        pdf_display = f'<iframe src="data:application/pdf;base64,{b64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
+                        st.markdown(pdf_display, unsafe_allow_html=True)
+                    else:
+                        st.info("Preview not supported for this file format.")
+
+                # Detailed AI Analysis & Admin Overrides (Right)
+                with col_details:
+                    st.markdown("#### 🎯 Evaluation Breakdown")
+                    st.markdown(f"**Final Score:** `{item['final_score']} / 100` | **Word Count:** `{item['word_count']}`")
+                    st.markdown(f"**Gemini:** {item['scores'][0]} | **GPT-4o:** {item['scores'][1]} | **Claude:** {item['scores'][2]}")
+                    
+                    # ADMIN ONLY: Score Override & Remarks
+                    if IS_ADMIN:
+                        st.divider()
+                        st.markdown("##### ✏️ Admin Score Override & Feedback Adjuster")
+                        adj_score = st.number_input(
+                            f"Adjust Score for {item['student_id']}", 
+                            min_value=0.0, max_value=100.0, 
+                            value=float(item['final_score']), step=0.5, 
+                            key=f"score_adj_{item['student_id']}"
+                        )
+                        remarks = st.text_area("Admin Feedback Remarks", key=f"remarks_{item['student_id']}", placeholder="Optional notes for manual adjustment...")
+                        if st.button("Save Manual Grade Override", key=f"save_override_{item['student_id']}"):
+                            save_grade(USER_NAME, USER_EMAIL, item['student_id'], assignment_type, adj_score, f"{item['word_count']} (Admin Modified)")
+                            st.success(f"Successfully updated grade to {adj_score} in Google Sheets!")
+
+                    st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
+
+                    st.divider()
+                    t1, t2, t3 = st.tabs(["🤖 Gemini", "🧠 GPT-4o", "🦉 Claude"])
+                    with t1: st.json(item['res_g'])
+                    with t2: st.json(item['res_o'])
+                    with t3: st.json(item['res_c'])
