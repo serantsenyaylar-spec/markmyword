@@ -48,6 +48,28 @@ def get_google_credentials():
         st.error(f"Error initializing Google credentials: {e}")
     return None
 
+# --- USER LOGIN LOGGING ---
+def log_user_login(user_name, user_email):
+    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
+    try:
+        creds = get_google_credentials()
+        if not creds:
+            return None
+
+        client = gspread.authorize(creds)
+        sheet_id = get_secret("SHEET_ID")
+        
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).worksheet("Logins")
+        else:
+            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+            
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        sheet.append_row([timestamp, user_name, user_email])
+        
+    except Exception as e:
+        print(f"Login Tracking Error: {e}")
+
 # --- SECRETS HELPER ---
 def get_secret(key_name):
     """Fetches secrets safely from Streamlit secrets or OS environment."""
@@ -55,6 +77,14 @@ def get_secret(key_name):
         return st.secrets[key_name]
     return os.environ.get(key_name, None)
 
+# --- EXECUTE AUTHENTICATION ---
+IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
+
+# --- LOG USER LOGIN (ONCE PER SESSION) ---
+if not st.session_state.get("user_session_logged", False):
+    st.session_state.user_session_logged = True
+    log_user_login(USER_NAME, USER_EMAIL)
+    
 # --- GOOGLE AUTH HELPER ---
 def get_google_credentials():
     """Unified Google OAuth2 Service Account Credentials helper."""
