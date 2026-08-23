@@ -42,24 +42,16 @@ button[kind="primary"] {
     border-radius: 8px !important;
     font-weight: 600 !important;
 }
-
-/* 🔒 HIDE THE PASSWORD VISIBILITY EYE ICON 🔒 */
-[data-testid="stTextInput"] button, 
-button[aria-label="Show password"], 
-button[aria-label="Hide password"] {
-    display: none !important;
-    pointer-events: none !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
-# --- UI HEADER & LOGO (Moved up so it shows immediately) ---
+# --- UI HEADER & LOGO ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 with col_logo:
     try:
         st.image("kurum_genel_logo_2_eng.png", use_container_width=True)
     except:
-        pass # Silently pass if image is missing so the app doesn't crash
+        pass 
 
 with col_title:
     st.title("Mark My Words")
@@ -67,26 +59,38 @@ with col_title:
 
 st.markdown("---")
 
-# --- SECURITY GATE ---
-def check_password():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if not st.session_state.authenticated:
+# --- GOOGLE AUTHENTICATION SECURITY GATE ---
+def check_authentication():
+    # 1. If not logged in at all, show the Google Sign-in button
+    if not st.user.is_logged_in:
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
-        password = st.text_input("Enter School Passcode:", type="password")
-        if st.button("Login", type="primary", use_container_width=True):
-            if password == st.secrets["app_password"]: 
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("😕 Incorrect passcode.")
-        st.stop() # Stops the rest of the app from loading until authenticated
+        st.markdown("Please log in with your **@istek.edu.tr** account to access the grading portal.")
+        if st.button("Log in with Google", type="primary", use_container_width=True):
+            st.login("google")
+        st.stop() # Stop loading the rest of the app
 
-# Run the security check
-check_password()
+    # 2. If logged in, verify the email domain
+    user_email = getattr(st.user, "email", "")
+    if not user_email.endswith("@istek.edu.tr"):
+        st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
+        st.markdown("You must use a valid İSTEK Schools email address to access this tool.")
+        if st.button("Sign out and try another account", type="primary", use_container_width=True):
+            st.logout()
+        st.stop() # Stop loading the rest of the app if domain is wrong
 
-# --- EVERYTHING BELOW THIS LINE ONLY APPEARS AFTER SUCCESSFUL LOGIN ---
+    # 3. If passed, show a small welcome and logout button in the sidebar
+    with st.sidebar:
+        st.success("✅ Authenticated")
+        st.markdown(f"**Logged in as:**\n{user_email}")
+        if st.button("Log out"):
+            st.logout()
+
+# Run the security check FIRST
+check_authentication()
+
+
+# --- EVERYTHING BELOW THIS LINE ONLY APPEARS TO VERIFIED @ISTEK.EDU.TR USERS ---
+
 
 # --- GOOGLE SERVICES INTEGRATION ---
 def get_google_credentials():
