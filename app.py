@@ -35,15 +35,35 @@ st.set_page_config(
 # --- THEME-AWARE STYLING & TYPOGRAPHY ---
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto:wght@300;400;500;700&display=swap');
 
-html, body, [class*="css"], p, div, label, span, h1, h2, h3, h4, h5, h6 {
-    font-family: 'Roboto', sans-serif !important;
+/* Master font override for Streamlit root DOM */
+html, body, .stApp, 
+.stApp p, .stApp div, .stApp span, .stApp label, 
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+.stApp input, .stApp textarea, .stApp select,
+div[data-testid="stMarkdownContainer"] * {
+    font-family: 'Inter', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
 }
 
-button[kind="primary"] {
+/* Heading polish */
+.stApp h1, .stApp h2, .stApp h3 {
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+    color: inherit !important;
+}
+
+/* Button UI enhancement */
+div[data-testid="stButton"] > button {
     border-radius: 8px !important;
     font-weight: 600 !important;
+    font-size: 0.95rem !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+/* Preserve Streamlit Material Icons */
+[data-testid="stIcon"], i, [class*="Material"] {
+    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -97,9 +117,8 @@ def check_authentication():
         if st.button("Log out"):
             st.logout()
 
-# Run authentication check before doing anything else
+# Run authentication check before proceeding
 check_authentication()
-
 
 # --- GOOGLE SERVICES INTEGRATION ---
 def get_google_credentials():
@@ -134,7 +153,7 @@ def save_grade(student, assignment, score, word_count):
         sheet = get_google_sheet()
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([timestamp, student, assignment, score, word_count])
-    except Exception as e:
+    except Exception:
         pass 
 
 # --- MAIN GRADING LAYOUT ---
