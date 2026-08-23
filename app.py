@@ -22,6 +22,14 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+# --- PAGE SETUP (Must be the first Streamlit command) ---
+st.set_page_config(
+    page_title="Mark My Words | İSTEK", 
+    page_icon="📝", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
+
 # --- GOOGLE AUTH HELPER ---
 def get_google_credentials():
     """Retrieve Google OAuth2 Service Account Credentials from Streamlit secrets."""
@@ -47,46 +55,31 @@ def get_secret(key_name):
         return st.secrets[key_name]
     return os.environ.get(key_name, None)
 
-# --- USER LOGIN LOGGING ---
-def log_user_login(user_name, user_email):
-    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
-    try:
-        creds = get_google_credentials()
-        if not creds:
-            return None
-
-        client = gspread.authorize(creds)
-        sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+# --- GOOGLE AUTH HELPER ---
+def get_google_credentials():
+    """Unified Google OAuth2 Service Account Credentials helper."""
+    creds_secret = get_secret("gcp_service_account") or get_secret("google_credentials")
+    
+    if not creds_secret:
+        return None
         
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-        sheet.append_row([timestamp, user_name, user_email])
+    try:
+        from google.oauth2.service_account import Credentials
+        
+        # Safely parse JSON if passed as a string
+        creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+        
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/drive.file"
+        ]
+        return Credentials.from_service_account_info(creds_json, scopes=scopes)
         
     except Exception as e:
-        print(f"Login Tracking Error: {e}")
-
-# --- INITIALIZE GOOGLE AUTH & CLIENT ---
-creds = get_google_credentials()
-client = None
-
-if creds:
-    try:
-        import gspread
-
-        client = gspread.authorize(creds)
-        sheet_id = get_secret("SHEET_ID")
-
-        if sheet_id:
-            sheet = client.open_by_key(sheet_id).worksheet("Logins")
-        else:
-            sheet = client.open("İstek_Schools_Grading_Database").worksheet(
-                "Logins"
-            )
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now_str, USER_NAME, USER_EMAIL])
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Could not log login session: {str(e)}")
-
+        st.error(f"Error initializing Google credentials: {e}")
+        return None
+        
 # --- CONFIGURATION ---
 DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
 SHEET_ID = get_secret("SHEET_ID")
@@ -171,6 +164,24 @@ html, body, .stApp { font-family: 'Inter', sans-serif !important; }
 .user-card-name { font-weight: 700; font-size: 1.05rem; }
 .user-card-email { font-size: 0.82rem; opacity: 0.8; word-break: break-all; }
 
+# Category score chips
+                p_res = item["res_primary"]
+                
+                # Sanitize AI outputs before HTML injection
+                task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
+                org = html.escape(str(p_res.get('score_organization', 'N/A')))
+                acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
+                words = html.escape(str(item['word_count']))
+
+                st.markdown(f"""
+                <div class="chip-container">
+                    <span class="chip">🎯 Task Achievement: {task_ach}</span>
+                    <span class="chip">🧩 Organization: {org}</span>
+                    <span class="chip">✍️ Accuracy: {acc}</span>
+                    <span class="chip">📏 Words: {words}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
 /* Category Chip Styling */
 .chip-container { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .chip {
