@@ -22,7 +22,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- CONFIGURATION ---
+# --- SYSTEM CONFIGURATION ---
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k")
 SHEET_ID = st.secrets.get("SHEET_ID", "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE")
 ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr", "serantsenyaylar-spec"])
@@ -31,7 +31,7 @@ ALLOWED_DOMAIN = "@istek.k12.tr"
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
 
-# --- PAGE SETTINGS ---
+# --- PAGE SETUP ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
     page_icon="📝", 
@@ -39,7 +39,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- LIGHT & DARK MODE COMPATIBLE STYLING ---
+# --- GLOBAL STYLES ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -95,36 +95,24 @@ div[data-testid="stButton"] > button {
 </style>
 """, unsafe_allow_html=True)
 
-# --- SESSION STATE INITIALIZATION & PERSISTENCE ---
-if "graded_count" not in st.session_state:
-    st.session_state.graded_count = 0
+# --- SESSION STATE MANAGEMENT ---
+default_states = {
+    "graded_count": 0,
+    "graded_results": [],
+    "auth_user": None,
+    "preset_template": "Guided Essay Writing (120–150 words)",
+    "demo_loaded": False,
+    "custom_rubric_df": None,
+    "active_question": "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience.",
+    "total_rubric_scale": 100,
+    "raw_rubric": ""
+}
 
-if "graded_results" not in st.session_state:
-    st.session_state.graded_results = []
+for key, val in default_states.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-if "auth_user" not in st.session_state:
-    st.session_state.auth_user = None
-
-if "preset_template" not in st.session_state:
-    st.session_state.preset_template = "Guided Essay Writing (120–150 words)"
-
-if "demo_loaded" not in st.session_state:
-    st.session_state.demo_loaded = False
-
-# Persistent Rubric & Assignment Info State
-if "custom_rubric_df" not in st.session_state:
-    st.session_state.custom_rubric_df = None
-
-if "active_question" not in st.session_state:
-    st.session_state.active_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
-
-if "total_rubric_scale" not in st.session_state:
-    st.session_state.total_rubric_scale = 100
-
-if "raw_rubric" not in st.session_state:
-    st.session_state.raw_rubric = ""
-
-# --- USER IDENTITY EXTRACTION ---
+# --- IDENTITY EXTRACTION ---
 def extract_user_identity():
     user_email, user_name = "", ""
     try:
@@ -135,8 +123,7 @@ def extract_user_identity():
 
     if user_email and not user_name:
         name_part = user_email.split("@")[0]
-        tokens = name_part.split(".")
-        user_name = " ".join([t.capitalize() for t in tokens])
+        user_name = " ".join([t.capitalize() for t in name_part.split(".")])
 
     if user_email:
         st.session_state.auth_user = {"email": user_email, "name": user_name or "Teacher User"}
@@ -179,7 +166,7 @@ with col_title:
 
 st.markdown("---")
 
-# --- AUTHENTICATION ---
+# --- AUTHENTICATION & DIAGNOSTICS SIDEBAR ---
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
 
@@ -191,15 +178,11 @@ def check_authentication():
         st.stop()
 
     user_email, user_name = extract_user_identity()
-
-    is_admin = any(
-        admin.lower() in [user_email.lower(), user_name.lower()] 
-        for admin in ADMIN_EMAILS
-    )
+    is_admin = any(admin.lower() in [user_email.lower(), user_name.lower()] for admin in ADMIN_EMAILS)
 
     if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
-        if st.button("Sign out and try another account", type="primary", use_container_width=True):
+        if st.button("Sign out", type="primary", use_container_width=True):
             st.session_state.auth_user = None
             st.logout()
         st.stop()
@@ -229,7 +212,6 @@ def check_authentication():
 
         st.divider()
 
-        # System Diagnostics Panel
         with st.expander("🛠️ **System Diagnostics**", expanded=False):
             gemini_ok = "gemini_api_key" in st.secrets
             openai_ok = "openai_api_key" in st.secrets
@@ -264,7 +246,7 @@ def check_authentication():
 
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
-# --- HELPER & GOOGLE API FUNCTIONS ---
+# --- GOOGLE WORKSPACE APIS ---
 def get_google_credentials():
     if "google_credentials" not in st.secrets:
         return None
@@ -307,6 +289,7 @@ def save_grade(teacher_name, teacher_email, student, assignment, score, word_cou
     except Exception:
         pass 
 
+# --- PARSING & SCORE UTILITIES ---
 def parse_json_response(raw_text):
     clean_text = raw_text.strip()
     fence = chr(96) * 3
@@ -361,7 +344,6 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
-# Gemini 3.6 Flash
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
     candidate_models = ["gemini-3.6-flash", "gemini-2.5-flash"]
     last_err = ""
@@ -387,21 +369,14 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
             except Exception as e:
                 err_str = str(e)
                 last_err = f"{model_name}: {err_str}"
-                
                 if any(code in err_str for code in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"]):
                     time.sleep(2 ** (attempt + 1))
                     continue
                 else:
                     break
 
-    return {
-        "is_valid_submission": False, 
-        "rejection_reason": f"Gemini Error: {last_err}", 
-        "total_score": 0, 
-        "word_count": 0
-    }
+    return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
 
-# OpenAI GPT-4o Mini
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
         if mime_type.startswith("text/"):
@@ -428,14 +403,11 @@ def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"GPT-4o-mini Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# Anthropic Claude 3.5 Sonnet
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     try:
         if mime_type.startswith("text/"):
             text_str = file_bytes.decode("utf-8", errors="ignore")
-            content_payload = [
-                {"type": "text", "text": f"{user_prompt}\n\nStudent Essay File:\n{text_str}\nReturn strictly JSON."}
-            ]
+            content_payload = [{"type": "text", "text": f"{user_prompt}\n\nStudent Essay File:\n{text_str}\nReturn strictly JSON."}]
         elif mime_type == "application/pdf":
             b64 = base64.b64encode(file_bytes).decode("utf-8")
             content_payload = [
@@ -459,7 +431,7 @@ def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"Claude-Sonnet Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# --- TEACHER DASHBOARD ---
+# --- DASHBOARD STATS ---
 st.markdown(f"### 👋 Welcome back, **{USER_NAME}**")
 hm1, hm2, hm3 = st.columns(3)
 hm1.metric("Papers Graded (Session)", f"{st.session_state.graded_count} / {MAX_PAPERS_PER_SESSION}")
@@ -468,7 +440,7 @@ hm3.metric("Account Role", "👑 Admin User" if IS_ADMIN else "✅ Teacher User"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- 3-STEP WIZARD TABS ---
+# --- 3-STEP WIZARD UI ---
 wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
     "⚙️ Step 1: Prompt & Rubric Setup", 
     "📤 Step 2: Upload & File Pre-Flight", 
@@ -495,7 +467,6 @@ with wizard_tab1:
             st.rerun()
 
     st.divider()
-
     col_assign1, col_assign2 = st.columns([1, 1])
 
     with col_assign1:
@@ -506,39 +477,27 @@ with wizard_tab1:
         )
 
         question_option = st.radio("Assignment Questions / Prompt Source", ["Use Preset Question Prompt", "Type Custom Question / Prompt", "Upload Question File (.txt / .json)"], horizontal=True)
-
         default_essay_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
         default_para_question = "Write a 70-90 word paragraph describing your ideal morning routine before school starts. Explain why each activity helps your day."
 
         if question_option == "Use Preset Question Prompt":
             active_q = default_essay_question if "Essay" in assignment_type else default_para_question
         elif question_option == "Type Custom Question / Prompt":
-            active_q = st.text_area(
-                "Enter Assignment Question / Prompt for AI Evaluation:", 
-                value=st.session_state.active_question,
-                height=110
-            )
+            active_q = st.text_area("Enter Assignment Question / Prompt for AI Evaluation:", value=st.session_state.active_question, height=110)
         else:
             q_file = st.file_uploader("Upload Question File (.txt)", type=["txt", "json"])
-            if q_file:
-                active_q = q_file.getvalue().decode("utf-8", errors="ignore")
-                st.success("✅ Custom assignment question loaded successfully.")
-            else:
-                active_q = st.session_state.active_question
+            active_q = q_file.getvalue().decode("utf-8", errors="ignore") if q_file else st.session_state.active_question
 
         st.session_state.active_question = active_q
         st.info(f"📌 **Active Prompt Configured:**\n\n{st.session_state.active_question}")
 
     with col_assign2:
         default_fn = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
-        if os.path.exists(default_fn):
-            default_rubric_df = pd.read_csv(default_fn)
-        else:
-            default_rubric_df = pd.DataFrame({
-                "Criteria": ["Task Achievement", "Organization", "Grammatical Accuracy"],
-                "Max Score": [35, 35, 30],
-                "Description": ["Fulfills prompt criteria", "Logical structure and paragraphs", "Correct syntax, spelling, punctuation"]
-            })
+        default_rubric_df = pd.read_csv(default_fn) if os.path.exists(default_fn) else pd.DataFrame({
+            "Criteria": ["Task Achievement", "Organization", "Grammatical Accuracy"],
+            "Max Score": [35, 35, 30],
+            "Description": ["Fulfills prompt criteria", "Logical structure and paragraphs", "Correct syntax, spelling, punctuation"]
+        })
 
         rubric_source = st.radio("Rubric Source", ["Use Default Rubric", "Upload Custom CSV Rubric"], horizontal=True)
 
@@ -546,31 +505,20 @@ with wizard_tab1:
             custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric File", type=["csv"])
             if custom_rubric_file:
                 try:
-                    loaded_df = pd.read_csv(custom_rubric_file)
-                    st.session_state.custom_rubric_df = loaded_df
+                    st.session_state.custom_rubric_df = pd.read_csv(custom_rubric_file)
                     st.success("✅ Custom rubric uploaded & remembered in session state!")
                 except Exception as e:
                     st.error(f"Error reading CSV: {str(e)}")
 
-            if st.session_state.custom_rubric_df is not None:
-                active_rubric_df = st.session_state.custom_rubric_df
-                st.info("🧠 **Currently Using Custom Uploaded Rubric**")
-            else:
-                active_rubric_df = default_rubric_df
+            active_rubric_df = st.session_state.custom_rubric_df if st.session_state.custom_rubric_df is not None else default_rubric_df
         else:
             st.session_state.custom_rubric_df = None
             active_rubric_df = default_rubric_df
 
         st.dataframe(active_rubric_df, height=140, use_container_width=True)
-
-        st.markdown("##### 🎯 Rubric Point Scale")
         auto_total = detect_max_score(active_rubric_df)
 
-        total_rubric_scale = st.number_input(
-            "Total Evaluation Scale (Out Of Number)", 
-            min_value=1, max_value=500, value=auto_total, step=1
-        )
-        st.session_state.total_rubric_scale = total_rubric_scale
+        st.session_state.total_rubric_scale = st.number_input("Total Evaluation Scale (Out Of Number)", min_value=1, max_value=500, value=auto_total, step=1)
         st.session_state.raw_rubric = active_rubric_df.to_string()
 
     st.success(f"✅ **Step 1 Configured!** Rubric Scale set to **{st.session_state.total_rubric_scale} Points**.")
@@ -583,7 +531,6 @@ with wizard_tab2:
     with col_up1:
         uploaded_files = st.file_uploader("Upload Student Work (PDF, JPG, PNG, TXT)", type=["pdf", "png", "jpg", "jpeg", "webp", "txt"], accept_multiple_files=True)
     with col_up2:
-        st.markdown("**Test Drive App**")
         if st.button("🧪 Load Sample Paper"):
             st.session_state.demo_loaded = True
 
@@ -631,7 +578,6 @@ For example, when our English teacher assigned a group presentation last week, w
         openai_client = OpenAI(api_key=st.secrets["openai_api_key"])
         anthropic_client = anthropic.Anthropic(api_key=st.secrets["anthropic_api_key"])
 
-        # Fetch setup info safely from session state
         active_q = st.session_state.active_question
         raw_r = st.session_state.raw_rubric
         scale_val = st.session_state.total_rubric_scale
@@ -672,17 +618,10 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 valid_results = {name: r for name, r in all_responses.items() if check_validity(r)}
                 
                 if not valid_results:
-                    st.error(f"❌ **Evaluation Failed ({file.name}):** All AI models failed. Check network connectivity or API key configurations.")
-                    with st.expander(f"🔍 Diagnostic Errors for `{file.name}`", expanded=True):
-                        for model_name, res in all_responses.items():
-                            st.markdown(f"**{model_name}:** `{res.get('rejection_reason', 'Unknown error')}`")
+                    st.error(f"❌ **Evaluation Failed ({file.name}):** All AI models failed.")
                     continue
 
-                if len(valid_results) < 3:
-                    st.warning(f"💡 **Notice ({file.name}):** Evaluation completed using active models: `{', '.join(valid_results.keys())}`.")
-
                 st.session_state.graded_count += 1
-
                 valid_scores = [r.get("total_score", 0) for r in valid_results.values()]
                 final_score = round(sum(valid_scores) / len(valid_scores), 1)
 
@@ -695,8 +634,6 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 o_score = res_o.get("total_score", "Skipped") if check_validity(res_o) else "Skipped"
                 c_score = res_c.get("total_score", "Skipped") if check_validity(res_c) else "Skipped"
 
-                scores_summary = f"Gemini 3.6 Flash: {g_score} | GPT-4o Mini: {o_score} | Claude Sonnet: {c_score}"
-
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, scale_val)
 
                 report_text = f"""================================================================================
@@ -705,7 +642,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
 Final Consensus Score: {final_score} / {scale_val}
-Model Scores Summary: {scores_summary}
+Model Scores Summary: Gemini: {g_score} | GPT-4o Mini: {o_score} | Claude: {c_score}
 ================================================================================
 Target Question / Prompt:
 {active_q}
@@ -739,12 +676,12 @@ Feedback:
                 })
 
         if st.session_state.graded_results:
-            st.success("✅ Evaluation Complete! Switch to **Step 3** tab to view grades and download reports.")
+            st.success("✅ Evaluation Complete! Switch to **Step 3** tab to view grades.")
 
-# --- TAB 3: EVALUATION & REPORTS ---
+# --- TAB 3: REPORTS ---
 with wizard_tab3:
     if not st.session_state.graded_results:
-        st.info("📌 **No evaluation results yet.** Run evaluations in **Step 2** to view student grades here.")
+        st.info("📌 **No evaluation results yet.** Run evaluations in **Step 2**.")
     else:
         graded_results = st.session_state.graded_results
 
@@ -775,12 +712,7 @@ with wizard_tab3:
                         st.image(item["file_bytes"], use_container_width=True)
                     elif item["mime_type"] == "application/pdf":
                         b64_pdf = base64.b64encode(item["file_bytes"]).decode("utf-8")
-                        pdf_display = f'''
-                            <object data="data:application/pdf;base64,{b64_pdf}" type="application/pdf" width="100%" height="500px">
-                                <p>PDF preview not supported.</p>
-                            </object>
-                        '''
-                        st.markdown(pdf_display, unsafe_allow_html=True)
+                        st.markdown(f'<object data="data:application/pdf;base64,{b64_pdf}" type="application/pdf" width="100%" height="500px"></object>', unsafe_allow_html=True)
                     else:
                         st.text_area("Plain Text Submission Preview", value=item["file_bytes"].decode("utf-8", errors="ignore"), height=300)
 
