@@ -390,6 +390,31 @@ wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
     "📊 Step 3: Evaluation & Reports"
 ])
 
+# --- HELPER: DYNAMIC RUBRIC SCALING ---
+def scale_rubric_dataframe(df, target_scale):
+    """Proportionally scales the rubric criteria scores to match the target total scale."""
+    df_scaled = df.copy()
+    score_col = None
+    possible_cols = ["max score", "max points", "points", "score", "max_score", "max_points", "weight"]
+    
+    for col in df_scaled.columns:
+        if str(col).strip().lower() in possible_cols:
+            score_col = col
+            break
+            
+    if score_col:
+        try:
+            numeric_scores = pd.to_numeric(df_scaled[score_col], errors='coerce').fillna(0)
+            original_total = numeric_scores.sum()
+            if original_total > 0:
+                scaled_values = (numeric_scores / original_total) * target_scale
+                df_scaled[score_col] = scaled_values.apply(lambda v: round(v, 1) if v % 1 != 0 else int(v))
+        except Exception:
+            pass
+            
+    return df_scaled
+
+
 # --- TAB 1: SETUP ---
 with wizard_tab1:
     st.markdown("#### ⚡ Quick-Start Templates")
@@ -444,27 +469,63 @@ with wizard_tab1:
 
         rubric_source = st.radio("Rubric Source", ["Use Default Rubric", "Upload Custom CSV Rubric"], horizontal=True)
 
+        if rubric_source == "Upload Custom CSV Rubric" or assignment_type == "Custom Assignment":
+            with st.expander("📖 **Guide: How to Create & Upload Custom Rubrics**", expanded=True):
+                st.markdown("""
+                * **Step 1:** Open **Google Sheets** or **Microsoft Excel**.
+                * **Step 2:** Set up **3 required column headers** in Row 1:
+                  * `Criteria`: Name of the scoring dimension (e.g., *Vocabulary*, *Grammar*).
+                  * `Max Score`: Numerical point value assigned to each section.
+                  * `Description`: Guidance telling the AI what to look for when grading.
+                * **Step 3:** Go to **File ➔ Download ➔ Comma-separated values (.csv)**.
+                * **Step 4:** Drag and drop your `.csv` file into the upload box below.
+                """)
+                
+                # Sample downloadable template button
+                sample_csv = "Criteria,Max Score,Description\nContent & Ideas,40,Clear response to prompt with detailed arguments\nStructure & Grammar,30,Logical flow and grammatical precision\nVocabulary,30,Varied range of high-level lexical items"
+                st.download_button(
+                    label="📥 Download Sample Rubric (.csv)",
+                    data=sample_csv,
+                    file_name="Sample_Rubric_Template.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
         if rubric_source == "Upload Custom CSV Rubric":
             custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric File", type=["csv"])
             if custom_rubric_file:
                 try:
                     st.session_state.custom_rubric_df = pd.read_csv(custom_rubric_file)
-                    st.success("✅ Custom rubric uploaded & remembered in session state!")
+                    st.success("✅ Custom rubric loaded successfully!")
                 except Exception as e:
                     st.error(f"Error reading CSV: {str(e)}")
 
-            active_rubric_df = st.session_state.custom_rubric_df if st.session_state.custom_rubric_df is not None else default_rubric_df
+            active_base_df = st.session_state.custom_rubric_df if st.session_state.custom_rubric_df is not None else default_rubric_df
         else:
             st.session_state.custom_rubric_df = None
-            active_rubric_df = default_rubric_df
+            active_base_df = default_rubric_df
 
-        st.dataframe(active_rubric_df, height=140, use_container_width=True)
-        auto_total = detect_max_score(active_rubric_df)
+        # Calculate natural maximum sum of criteria
+        base_total = detect_max_score(active_base_df)
 
-        st.session_state.total_rubric_scale = st.number_input("Total Evaluation Scale (Out Of Number)", min_value=1, max_value=500, value=auto_total, step=1)
-        st.session_state.raw_rubric = active_rubric_df.to_string()
+        # Scale selector input
+        target_scale = st.number_input(
+            "Total Evaluation Scale (Target Out Of Scale)", 
+            min_value=1, 
+            max_value=500, 
+            value=base_total, 
+            step=1
+        )
+        st.session_state.total_rubric_scale = target_scale
 
-    st.success(f"✅ **Step 1 Configured!** Rubric Scale set to **{st.session_state.total_rubric_scale} Points**.")
+        # Automatically adjust rubric values proportionally
+        scaled_rubric_df = scale_rubric_dataframe(active_base_df, target_scale)
+
+        # Render dynamically updated rubric dataframe
+        st.dataframe(scaled_rubric_df, height=160, use_container_width=True)
+        st.session_state.raw_rubric = scaled_rubric_df.to_string()
+
+    st.success(f"✅ **Step 1 Configured!** Rubric dynamically scaled to **{st.session_state.total_rubric_scale} Points**.")
 
 # --- TAB 2: UPLOAD & EVALUATE ---
 with wizard_tab2:
