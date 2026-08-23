@@ -32,33 +32,43 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- THEME-AWARE STYLING & TYPOGRAPHY ---
+# --- CONTAINER-SAFE TYPOGRAPHY & STYLING ---
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Roboto:wght@300;400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-/* Master font override for Streamlit root DOM */
-html, body, .stApp, 
-.stApp p, .stApp div, .stApp span, .stApp label, 
-.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
-.stApp input, .stApp textarea, .stApp select,
-div[data-testid="stMarkdownContainer"] * {
-    font-family: 'Inter', 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+/* Apply font to root application container */
+html, body, .stApp {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
 }
 
-/* Heading polish */
+/* Target specific text elements (Leaves flexbox layout divs untouched) */
+.stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+.stApp input, .stApp textarea, .stApp button, .stApp select {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+}
+
+/* Enforce strict word wrapping inside containers to prevent text overflow */
+div[data-testid="stMarkdownContainer"], 
+div[data-testid="stMarkdownContainer"] p,
+div[data-testid="stText"], 
+.stApp p {
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+    white-space: normal !important;
+}
+
+/* Polish headings */
 .stApp h1, .stApp h2, .stApp h3 {
     font-weight: 700 !important;
     letter-spacing: -0.02em !important;
-    color: inherit !important;
 }
 
-/* Button UI enhancement */
+/* Button UI styling */
 div[data-testid="stButton"] > button {
     border-radius: 8px !important;
     font-weight: 600 !important;
     font-size: 0.95rem !important;
-    transition: all 0.2s ease-in-out !important;
 }
 
 /* Preserve Streamlit Material Icons */
@@ -117,7 +127,7 @@ def check_authentication():
         if st.button("Log out"):
             st.logout()
 
-# Run authentication check before proceeding
+# Run authentication check
 check_authentication()
 
 # --- GOOGLE SERVICES INTEGRATION ---
