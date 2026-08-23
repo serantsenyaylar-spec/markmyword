@@ -237,6 +237,8 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
 # --- HELPER & GOOGLE API FUNCTIONS ---
 def get_google_credentials():
+    if "google_credentials" not in st.secrets:
+        return None
     creds_secret = st.secrets["google_credentials"]
     creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
     scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
@@ -245,6 +247,8 @@ def get_google_credentials():
 def upload_file_to_drive(file_bytes, file_name, folder_id, mime_type):
     try:
         creds = get_google_credentials()
+        if not creds:
+            return False
         service = build('drive', 'v3', credentials=creds)
         file_metadata = {'name': file_name, 'parents': [folder_id]}
         media = MediaIoBaseUpload(BytesIO(file_bytes), mimetype=mime_type, resumable=True)
@@ -255,12 +259,16 @@ def upload_file_to_drive(file_bytes, file_name, folder_id, mime_type):
 
 def get_google_sheet():
     creds = get_google_credentials()
+    if not creds:
+        return None
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID).sheet1
 
 def save_grade(teacher_name, teacher_email, student, assignment, score, word_count, total_scale):
     try:
         sheet = get_google_sheet()
+        if not sheet:
+            return
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         sheet.append_row([
             now_utc.strftime("%Y-%m-%d"), 
@@ -294,7 +302,7 @@ Calculate point scores based on individual criterion points provided in <rubric_
 
 Return your evaluation EXACTLY as a JSON object with this schema:
 {
-  "is_valid_submission": true/false,
+  "is_valid_submission": true,
   "rejection_reason": "N/A or detail",
   "transcribed_text": "...",
   "red_pen_corrections": "...",
@@ -308,10 +316,16 @@ Return your evaluation EXACTLY as a JSON object with this schema:
 
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
     try:
-        doc_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        if mime_type.startswith("text/"):
+            text_str = file_bytes.decode("utf-8", errors="ignore")
+            contents = [SYSTEM_PROMPT, user_prompt, f"\n\nStudent Essay File:\n{text_str}"]
+        else:
+            doc_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+            contents = [SYSTEM_PROMPT, user_prompt, doc_part]
+
         response = client.models.generate_content(
-            model="gemini-3.1-pro-preview", 
-            contents=[SYSTEM_PROMPT, user_prompt, doc_part],
+            model="gemini-2.5-flash", 
+            contents=contents,
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
         return json.loads(response.text)
@@ -320,36 +334,60 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
 
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
-        up_file = client.files.create(file=(file_name, file_bytes, mime_type), purpose="user_data")
-        try:
-            res = client.chat.completions.create(
-                model="gpt-4o",
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": [{"type": "text", "text": user_prompt}, {"type": "file", "file": {"file_id": up_file.id}}]}
-                ]
-            )
-            return json.loads(res.choices[0].message.content)
-        finally:
-            client.files.delete(up_file.id)
+        if mime_type.startswith("text/"):
+            text_str = file_bytes.decode("utf-8", errors="ignore")
+            content_payload = [
+                {"type": "text", "text": f"{user_prompt}\n\nStudent Essay File:\n{text_str}"}
+            ]
+        elif mime_type.startswith("image/"):
+            b64 = base64.b64encode(file_bytes).decode("utf-8")
+            content_payload = [
+                {"type": "text", "text": user_prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+            ]
+        else:
+            # Handle plain text fallback for PDFs/other docs
+            content_payload = [
+                {"type": "text", "text": f"{user_prompt}\n\nDocument File Name: {file_name}"}
+            ]
+
+        res = client.chat.completions.create(
+            model="gpt-4o",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": content_payload}
+            ]
+        )
+        return json.loads(res.choices[0].message.content)
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"GPT Error: {str(e)}", "total_score": 0, "word_count": 0}
 
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     try:
-        b64 = base64.b64encode(file_bytes).decode("utf-8")
-        mtype = "application/pdf" if mime_type == "application/pdf" else mime_type
-        dtype = "document" if mime_type == "application/pdf" else "image"
-        
+        if mime_type.startswith("text/"):
+            text_str = file_bytes.decode("utf-8", errors="ignore")
+            content_payload = [
+                {"type": "text", "text": f"{user_prompt}\n\nStudent Essay File:\n{text_str}\nReturn strictly JSON."}
+            ]
+        elif mime_type == "application/pdf":
+            b64 = base64.b64encode(file_bytes).decode("utf-8")
+            content_payload = [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
+                {"type": "text", "text": user_prompt + "\nReturn strictly JSON."}
+            ]
+        else:
+            b64 = base64.b64encode(file_bytes).decode("utf-8")
+            content_payload = [
+                {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}},
+                {"type": "text", "text": user_prompt + "\nReturn strictly JSON."}
+            ]
+
         res = client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=2000,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": [
-                {"type": dtype, "source": {"type": "base64", "media_type": mtype, "data": b64}},
-                {"type": "text", "text": user_prompt + "\nReturn strictly JSON."}
-            ]}]
+            messages=[{"role": "user", "content": content_payload}]
         )
         return parse_json_response(res.content[0].text)
     except Exception as e:
@@ -439,7 +477,6 @@ with wizard_tab1:
         rubric_source = st.radio("Rubric Source", ["Use Pre-installed Default", "Upload Custom Rubric"], horizontal=True)
 
         if rubric_source == "Upload Custom Rubric":
-            # --- INSTRUCTION GUIDE FOR TEACHERS ---
             with st.expander("📖 How to prepare your Custom Rubric CSV", expanded=True):
                 st.markdown("""
                 **Follow these 4 steps to create and upload your rubric:**
@@ -448,11 +485,10 @@ with wizard_tab1:
                    * `Criteria` — Category name (e.g., *Vocabulary*, *Task Achievement*).
                    * `Max Score` — The maximum points allocated to that specific criteria.
                    * `Description` — Specific scoring guidelines and rules for the AI evaluator.
-                2. **Specify Points & Total Score:** Choose any custom point values for each category (e.g., 5 points, 10 points, 25 points). The total rubric scale ("Out Of" number) will automatically match the sum of your criteria points.
+                2. **Specify Points & Total Score:** Choose any custom point values for each category.
                 3. **Format Example:**
                 """)
                 
-                # Interactive sample preview table showing custom out-of numbers
                 sample_df = pd.DataFrame({
                     "Criteria": ["Task Achievement", "Organization & Structure", "Grammar & Vocabulary"],
                     "Max Score": [10, 5, 5],
@@ -465,7 +501,7 @@ with wizard_tab1:
                 st.dataframe(sample_df, hide_index=True, use_container_width=True)
 
                 st.markdown("""
-                4. **Save/Export File:** Click **File → Download → Comma-separated values (.csv)** in Google Sheets, or **File → Save As → CSV (.csv)** in Excel.
+                4. **Save/Export File:** Click **File → Download → Comma-separated values (.csv)** in Google Sheets.
                 """)
 
             custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric", type=["csv"])
@@ -481,10 +517,8 @@ with wizard_tab1:
         else:
             active_rubric_df = default_rubric_df
 
-        # --- DYNAMIC "OUT OF" SCALE DEFINITION ---
         st.markdown("##### 🎯 Rubric Point Scale & Out Of Settings")
         
-        # Calculate auto-sum of Max Score column if available
         if "Max Score" in active_rubric_df.columns:
             try:
                 auto_total = int(pd.to_numeric(active_rubric_df["Max Score"]).sum())
@@ -500,8 +534,7 @@ with wizard_tab1:
                 min_value=1, 
                 max_value=500, 
                 value=auto_total, 
-                step=1,
-                help="Set the total maximum points for this assignment (e.g., Out of 10, Out of 20, or Out of 100)."
+                step=1
             )
         with col_scale2:
             st.metric("Total Rubric Max Score", f"{total_rubric_scale} Points")
@@ -520,13 +553,12 @@ with wizard_tab2:
     
     col_up1, col_up2 = st.columns([3, 1])
     with col_up1:
-        uploaded_files = st.file_uploader("Upload Student Work (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+        uploaded_files = st.file_uploader("Upload Student Work (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg", "webp", "txt"], accept_multiple_files=True)
     with col_up2:
         st.markdown("**Test Drive App**")
         if st.button("🧪 Load Sample Paper", help="Injects a sample B1 student essay to test the tri-model workflow immediately."):
             st.session_state.demo_loaded = True
 
-    # State management for active files
     active_files = []
     if uploaded_files:
         st.session_state.demo_loaded = False
@@ -568,7 +600,10 @@ For example, when our English teacher assigned a group presentation last week, w
             if st.button("Fetch Google Sheet Grade Logs"):
                 try:
                     sheet = get_google_sheet()
-                    st.dataframe(pd.DataFrame(sheet.get_all_records()), use_container_width=True)
+                    if sheet:
+                        st.dataframe(pd.DataFrame(sheet.get_all_records()), use_container_width=True)
+                    else:
+                        st.warning("Google Sheet integration is disabled or credentials are missing.")
                 except Exception as ex:
                     st.error(f"Sheet load error: {str(ex)}")
 
@@ -613,7 +648,7 @@ Check if submission contains legible handwritten/typed English work answering th
             
             drive_success = upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
             if not drive_success:
-                st.warning(f"⚠️ **Drive Sync Warning:** Original paper (`{file.name}`) could not be saved to Google Drive.")
+                st.caption(f"ℹ️ **Drive Note:** Google Drive sync skipped/unavailable for `{file.name}`.")
 
             with st.spinner(f"🚀 Running Parallel Tri-Model Consensus on {file.name}..."):
                 with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -625,15 +660,18 @@ Check if submission contains legible handwritten/typed English work answering th
                     res_o = f_gpt.result()
                     res_c = f_claude.result()
 
-                if not res_g.get("is_valid_submission") and not res_o.get("is_valid_submission"):
-                    st.warning(f"⚠️ **Skipped ({file.name}):** Invalid or unreadable submission.")
+                valid_results = [r for r in [res_g, res_o, res_c] if r.get("is_valid_submission")]
+                
+                if not valid_results:
+                    st.warning(f"⚠️ **Skipped ({file.name}):** Could not extract valid evaluation from AI models.")
                     continue
 
                 st.session_state.graded_count += 1
 
                 scores = [res_g.get("total_score", 0), res_o.get("total_score", 0), res_c.get("total_score", 0)]
-                final_score = round(sum(scores) / 3, 1)
-                word_count = res_g.get("word_count") or res_o.get("word_count") or "N/A"
+                valid_scores = [r.get("total_score", 0) for r in valid_results]
+                final_score = round(sum(valid_scores) / len(valid_scores), 1)
+                word_count = res_g.get("word_count") or res_o.get("word_count") or res_c.get("word_count") or "N/A"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, total_rubric_scale)
 
@@ -649,18 +687,15 @@ Target Question / Prompt:
 {active_question}
 
 Transcribed Text:
-{res_g.get('transcribed_text', 'N/A')}
+{res_g.get('transcribed_text') or res_o.get('transcribed_text') or res_c.get('transcribed_text') or 'N/A'}
 
 Feedback:
-{res_g.get('feedback', 'N/A')}
+{res_g.get('feedback') or res_o.get('feedback') or res_c.get('feedback') or 'N/A'}
 ================================================================================
 """
                 report_bytes = report_text.encode("utf-8")
                 report_fn = f"Report_{student_id}.txt"
-                
-                report_upload_success = upload_file_to_drive(report_bytes, report_fn, DRIVE_FOLDER_ID, "text/plain")
-                if not report_upload_success:
-                    st.warning(f"⚠️ **Drive Sync Warning:** Evaluation report (`{report_fn}`) could not be saved to Google Drive.")
+                upload_file_to_drive(report_bytes, report_fn, DRIVE_FOLDER_ID, "text/plain")
 
                 st.session_state.graded_results.append({
                     "student_id": student_id,
