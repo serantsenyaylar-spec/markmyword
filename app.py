@@ -102,11 +102,10 @@ def load_grades():
         return pd.DataFrame()
 
 # --- SIDEBAR: SETTINGS ---
-st.sidebar.header("⚙️ App Settings")
-st.sidebar.success("✅ Tri-Consensus Engine Active (Gemini + GPT-4o + Claude)")
+st.sidebar.header("⚙️ System Status")
+st.sidebar.success("✅ Tri-Consensus Engine Active\n(Gemini + GPT-4o + Claude)")
 st.sidebar.markdown("---")
-st.sidebar.subheader("📂 Custom Rubric")
-custom_rubric_file = st.sidebar.file_uploader("Upload Custom CSV Rubric", type=["csv"])
+st.sidebar.info("Upload rubrics directly on the main page.")
 
 # --- UI HEADER ---
 col_logo, col_title = st.columns([1, 4])
@@ -123,9 +122,21 @@ st.markdown("---")
 col1, col2 = st.columns([1, 1.2], gap="large")
 
 with col1:
-    st.subheader("1. Assignment Details")
+    st.subheader("1. Assignment Details & Rubric")
+    
     assignment_type = st.selectbox("Assignment Type", ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)"])
     
+    # NEW UI: Rubric Selection Toggle
+    rubric_source = st.radio("Rubric Source", ["Use Pre-installed Default", "Upload Custom Rubric"], horizontal=True)
+    
+    custom_rubric_file = None
+    if rubric_source == "Upload Custom Rubric":
+        custom_rubric_file = st.file_uploader("Upload your Custom CSV Rubric", type=["csv"])
+        if custom_rubric_file:
+            st.success("Custom rubric loaded and ready!")
+    else:
+        st.info("Using the default rubric based on your Assignment Type selection above.")
+
     st.subheader("2. Upload Papers")
     uploaded_pdfs = st.file_uploader("Upload Scanned Student PDFs", type=["pdf"], accept_multiple_files=True)
     
@@ -133,14 +144,16 @@ with col1:
         if not uploaded_pdfs:
             st.error("Please upload at least one PDF file.")
         else:
-            if custom_rubric_file:
+            # Determine which rubric to use
+            if rubric_source == "Upload Custom Rubric" and custom_rubric_file is not None:
                 rubric_text = pd.read_csv(custom_rubric_file).to_string()
             else:
+                # Fallback to defaults
                 filename = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
                 if os.path.exists(filename):
                     rubric_text = pd.read_csv(filename).to_string()
                 else:
-                    st.error(f"Missing default rubric: {filename}. Please upload one in the sidebar.")
+                    st.error(f"Missing default rubric: {filename}. Please check your files or upload a custom rubric.")
                     st.stop()
                     
             # Initialize API Clients
@@ -295,7 +308,6 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
                         
                         with st.expander(f"✅ Graded: {student_identifier} | Final Score: {final_score}", expanded=False):
                             
-                            # Discrepancy Alert Feature
                             if score_diff >= 10:
                                 st.warning(f"⚠️ **High Discrepancy Alert:** The models disagreed by {score_diff} points. Manual review recommended.")
                             else:
