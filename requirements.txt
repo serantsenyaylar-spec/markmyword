@@ -1,8 +1,7 @@
-streamlit>=1.42.0
+streamlit
 pandas
 google-genai
-openai
-anthropic
+groq
 gspread
 google-auth
 google-api-python-client
