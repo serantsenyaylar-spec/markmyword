@@ -72,11 +72,27 @@ ALLOWED_DOMAIN = "istek.k12.tr"
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
 
-# Best practice: use ID first, fallback to title name
-if SHEET_ID:
-    sheet = client.open_by_key(SHEET_ID).worksheet("Logins")
-else:
-    sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+# --- USER LOGIN LOGGING (Lines 70–85) ---
+creds = get_google_credentials()
+client = None
+
+if creds:
+    try:
+        client = gspread.authorize(creds)
+        sheet_id = get_secret("SHEET_ID")
+        
+        # Open by ID if available, fallback to title search
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).worksheet("Logins")
+        else:
+            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+            
+        # Record session login timestamp
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now_str, USER_NAME, USER_EMAIL])
+    except Exception as e:
+        # Fallback gracefully if database or sheet name fails to connect
+        st.sidebar.warning(f"⚠️ Could not log login session: {str(e)}")
 
 # --- PAGE SETUP (Must be the first Streamlit command) ---
 st.set_page_config(
