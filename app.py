@@ -12,7 +12,7 @@ import time
 import concurrent.futures
 from io import BytesIO
 
-# 100% FREE API INTEGRATIONS
+# --- FREE API INTEGRATIONS ---
 from google import genai
 from google.genai import types
 from groq import Groq
@@ -176,12 +176,12 @@ def check_authentication():
         st.divider()
 
         with st.expander("🛠️ **System Diagnostics**", expanded=False):
-            gemini_ok = "gemini_api_key" in st.secrets
-            groq_ok = "groq_api_key" in st.secrets
+            gemini_ok = "gemini_api_key" in st.secrets or "GEMINI_API_KEY" in os.environ
+            groq_ok = "groq_api_key" in st.secrets or "GROQ_API_KEY" in os.environ
             creds_ok = "google_credentials" in st.secrets
 
-            st.write("• **Google Gemini API:**", "🟢 Connected (Free Tier)" if gemini_ok else "🔴 Missing Secret")
-            st.write("• **Groq Llama API:**", "🟢 Connected (Free Tier)" if groq_ok else "🔴 Missing Secret")
+            st.write("• **Google Gemini API:**", "🟢 Connected" if gemini_ok else "🔴 Missing Secret")
+            st.write("• **Groq Llama API:**", "🟢 Connected" if groq_ok else "🔴 Missing Secret")
             st.write("• **Google Workspace:**", "🟢 Connected" if creds_ok else "⚠️ Unlinked")
 
         st.divider()
@@ -471,8 +471,11 @@ For example, when our English teacher assigned a group presentation last week, w
                 st.error(f"❌ Session limit exceeded. Only {MAX_PAPERS_PER_SESSION - st.session_state.graded_count} remaining.")
                 st.stop()
 
-        gemini_client = genai.Client(api_key=st.secrets["gemini_api_key"])
-        groq_client = Groq(api_key=st.secrets["groq_api_key"])
+        gemini_key = st.secrets.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
+        groq_key = st.secrets.get("groq_api_key") or os.environ.get("GROQ_API_KEY")
+
+        gemini_client = genai.Client(api_key=gemini_key)
+        groq_client = Groq(api_key=groq_key)
 
         active_q = st.session_state.active_question
         raw_r = st.session_state.raw_rubric
@@ -503,24 +506,24 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 
             upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
 
-            with st.spinner(f"🚀 Processing {file.name} across Free Models..."):
-                # 1. Run Gemini 2.0 Flash first
-                res_g20 = run_gemini_structured(gemini_client, "gemini-2.0-flash", user_prompt, file_bytes, mime_type)
+            with st.spinner(f"🚀 Processing {file.name} across Active Models..."):
+                # 1. Primary Run: Gemini 2.5 Flash
+                res_g25 = run_gemini_structured(gemini_client, "gemini-2.5-flash", user_prompt, file_bytes, mime_type)
                 
                 if not extracted_text:
-                    extracted_text = res_g20.get("transcribed_text", "")
+                    extracted_text = res_g25.get("transcribed_text", "")
 
-                # 2. Parallel run for Gemini 1.5 Flash and Groq Llama 3.3
+                # 2. Parallel Secondary Runs: Gemini 3.5 Flash & Groq Llama 3.3
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                    f_g15 = executor.submit(run_gemini_structured, gemini_client, "gemini-1.5-flash", user_prompt, file_bytes, mime_type)
+                    f_g35 = executor.submit(run_gemini_structured, gemini_client, "gemini-3.5-flash", user_prompt, file_bytes, mime_type)
                     f_groq = executor.submit(run_groq_structured, groq_client, user_prompt, extracted_text)
 
-                    res_g15 = f_g15.result()
+                    res_g35 = f_g35.result()
                     res_groq = f_groq.result()
 
                 all_responses = {
-                    "Gemini 2.0 Flash": res_g20, 
-                    "Gemini 1.5 Flash": res_g15, 
+                    "Gemini 2.5 Flash": res_g25, 
+                    "Gemini 3.5 Flash": res_g35, 
                     "Groq Llama 3.3 70B": res_groq
                 }
                 
@@ -542,19 +545,19 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 transcribed_text = primary_res.get("transcribed_text", extracted_text)
                 feedback = primary_res.get("feedback", "N/A")
 
-                score_g20 = res_g20.get("total_score", "Skipped") if check_validity(res_g20) else "Skipped"
-                score_g15 = res_g15.get("total_score", "Skipped") if check_validity(res_g15) else "Skipped"
+                score_g25 = res_g25.get("total_score", "Skipped") if check_validity(res_g25) else "Skipped"
+                score_g35 = res_g35.get("total_score", "Skipped") if check_validity(res_g35) else "Skipped"
                 score_groq = res_groq.get("total_score", "Skipped") if check_validity(res_groq) else "Skipped"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, scale_val)
 
                 report_text = f"""================================================================================
-İSTEK SCHOOLS AUTOMATED ENGLISH GRADING REPORT (FREE TIER AI ENGINE)
+İSTEK SCHOOLS AUTOMATED ENGLISH GRADING REPORT
 ================================================================================
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
 Final Consensus Score: {final_score} / {scale_val}
-Model Scores Summary: Gemini 2.0 Flash: {score_g20} | Gemini 1.5 Flash: {score_g15} | Groq Llama 3.3: {score_groq}
+Model Scores Summary: Gemini 2.5 Flash: {score_g25} | Gemini 3.5 Flash: {score_g35} | Groq Llama 3.3: {score_groq}
 ================================================================================
 Target Question / Prompt:
 {active_q}
@@ -578,9 +581,9 @@ Feedback:
                     "final_score": final_score,
                     "total_scale": scale_val,
                     "word_count": word_count,
-                    "scores": [score_g20, score_g15, score_groq],
-                    "res_g20": res_g20,
-                    "res_g15": res_g15,
+                    "scores": [score_g25, score_g35, score_groq],
+                    "res_g25": res_g25,
+                    "res_g35": res_g35,
                     "res_groq": res_groq,
                     "report_bytes": report_bytes,
                     "report_fn": report_fn,
@@ -588,7 +591,7 @@ Feedback:
                 })
 
         if st.session_state.graded_results:
-            st.success("✅ Free Evaluation Complete! Switch to **Step 3** to view details.")
+            st.success("✅ Evaluation Complete! Switch to **Step 3** to view details.")
 
 # --- TAB 3: REPORTS ---
 with wizard_tab3:
@@ -632,14 +635,14 @@ with wizard_tab3:
                     st.markdown("#### 🎯 Evaluation Breakdown")
                     st.markdown(f"**Target Question:** *\"{item.get('question', 'N/A')}\"*")
                     st.markdown(f"**Final Score:** `{item['final_score']} / {scale_val}` | **Word Count:** `{item['word_count']}`")
-                    st.markdown(f"**Gemini 2.0 Flash:** {item['scores'][0]} | **Gemini 1.5 Flash:** {item['scores'][1]} | **Groq Llama 3.3:** {item['scores'][2]}")
+                    st.markdown(f"**Gemini 2.5 Flash:** {item['scores'][0]} | **Gemini 3.5 Flash:** {item['scores'][1]} | **Groq Llama 3.3:** {item['scores'][2]}")
 
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini 2.0 Flash", "⚡ Gemini 1.5 Flash", "🦙 Groq Llama 3.3"])
-                    with t1: st.json(item['res_g20'])
-                    with t2: st.json(item['res_g15'])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini 2.5 Flash", "⚡ Gemini 3.5 Flash", "🦙 Groq Llama 3.3"])
+                    with t1: st.json(item['res_g25'])
+                    with t2: st.json(item['res_g35'])
                     with t3: st.json(item['res_groq'])
 
 # --- FOOTER ---
