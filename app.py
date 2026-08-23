@@ -321,9 +321,9 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
-# Gemini (Free Tier API)
+# Gemini 3.6 Flash Execution
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
-    candidate_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
+    candidate_models = ["gemini-3.6-flash", "gemini-2.5-flash"]
     last_err = ""
 
     for model_name in candidate_models:
@@ -361,7 +361,7 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
         "word_count": 0
     }
 
-# OpenAI GPT-4o-Mini (Lowest Cost Tier)
+# OpenAI GPT Free Tier Equivalent (GPT-4o Mini)
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
         if mime_type.startswith("text/"):
@@ -388,7 +388,7 @@ def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"GPT-4o-mini Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# Anthropic Claude 3.5 Haiku (Lowest Cost Tier)
+# Anthropic Claude 3.5 Sonnet Execution
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     try:
         if mime_type.startswith("text/"):
@@ -410,14 +410,14 @@ def run_claude_structured(client, user_prompt, file_bytes, mime_type):
             ]
 
         res = client.messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=2000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": content_payload}]
         )
         return parse_json_response(res.content[0].text)
     except Exception as e:
-        return {"is_valid_submission": False, "rejection_reason": f"Claude-Haiku Error: {str(e)}", "total_score": 0, "word_count": 0}
+        return {"is_valid_submission": False, "rejection_reason": f"Claude-Sonnet Error: {str(e)}", "total_score": 0, "word_count": 0}
 
 # --- TEACHER DASHBOARD ---
 st.markdown(f"### 👋 Welcome back, **{USER_NAME}**")
@@ -618,7 +618,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                     res_o = f_gpt.result()
                     res_c = f_claude.result()
 
-                all_responses = {"Gemini Flash": res_g, "GPT-4o-mini": res_o, "Claude Haiku": res_c}
+                all_responses = {"Gemini 3.6 Flash": res_g, "GPT-4o Mini": res_o, "Claude Sonnet": res_c}
                 valid_results = {name: r for name, r in all_responses.items() if check_validity(r)}
                 
                 if not valid_results:
@@ -645,7 +645,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 o_score = res_o.get("total_score", "Skipped") if check_validity(res_o) else "Skipped"
                 c_score = res_c.get("total_score", "Skipped") if check_validity(res_c) else "Skipped"
 
-                scores_summary = f"Gemini Flash: {g_score} | GPT-4o-mini: {o_score} | Claude Haiku: {c_score}"
+                scores_summary = f"Gemini 3.6 Flash: {g_score} | GPT-4o Mini: {o_score} | Claude Sonnet: {c_score}"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, total_rubric_scale)
 
@@ -738,12 +738,12 @@ with wizard_tab3:
                     st.markdown("#### 🎯 Evaluation Breakdown")
                     st.markdown(f"**Target Question:** *\"{item.get('question', 'N/A')}\"*")
                     st.markdown(f"**Final Score:** `{item['final_score']} / {scale_val}` | **Word Count:** `{item['word_count']}`")
-                    st.markdown(f"**Gemini Flash:** {item['scores'][0]} | **GPT-4o-mini:** {item['scores'][1]} | **Claude Haiku:** {item['scores'][2]}")
+                    st.markdown(f"**Gemini 3.6 Flash:** {item['scores'][0]} | **GPT-4o Mini:** {item['scores'][1]} | **Claude Sonnet:** {item['scores'][2]}")
 
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini Flash", "🧠 GPT-4o-mini", "🦉 Claude Haiku"])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini 3.6 Flash", "🧠 GPT-4o Mini", "🦉 Claude Sonnet"])
                     with t1: st.json(item['res_g'])
                     with t2: st.json(item['res_o'])
                     with t3: st.json(item['res_c'])
