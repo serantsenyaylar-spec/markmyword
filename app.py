@@ -165,6 +165,18 @@ def check_authentication():
 
         st.divider()
 
+        # --- NEW WORKSPACE LINKS SECTION ---
+        st.markdown("### 📁 **Workspace Links**")
+        if DRIVE_FOLDER_ID:
+            st.markdown(f"☁️ [**Google Drive Reports**](https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID})")
+        if SHEET_ID:
+            st.markdown(f"📊 [**Google Sheets Gradebook**](https://docs.google.com/spreadsheets/d/{SHEET_ID})")
+        
+        if not DRIVE_FOLDER_ID and not SHEET_ID:
+            st.caption("No Workspace links configured.")
+            
+        st.divider()
+
         with st.expander("🛠️ **System Diagnostics**", expanded=False):
             gemini_ok = "gemini_api_key" in st.secrets
             openai_ok = "openai_api_key" in st.secrets
@@ -182,8 +194,6 @@ def check_authentication():
             st.logout()
 
     return is_admin, user_email, user_name
-
-IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
 # --- GOOGLE WORKSPACE INTEGRATION ---
 def get_google_credentials():
