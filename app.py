@@ -5,7 +5,7 @@ import json
 import datetime
 import base64
 import html
-import mimetype
+import mimetypes
 import zipfile
 import io
 import time
