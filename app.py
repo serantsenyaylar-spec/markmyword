@@ -4,6 +4,7 @@ import os
 import re
 import json
 import datetime
+from zoneinfo import ZoneInfo
 import base64
 import concurrent.futures
 from io import BytesIO
@@ -17,6 +18,9 @@ import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+
+# --- TIMEZONE CONFIGURATION ---
+ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
 
 # --- GOOGLE RESOURCE IDs ---
 DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
@@ -43,19 +47,16 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-/* Apply font across root app */
 html, body, .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
 }
 
-/* Dynamic color variables support both Light and Dark Streamlit themes natively */
 .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
 .stApp input, .stApp textarea, .stApp button, .stApp select {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
     color: var(--text-color) !important;
 }
 
-/* Text Container Boundary Controls */
 div[data-testid="stMarkdownContainer"], 
 div[data-testid="stMarkdownContainer"] p,
 div[data-testid="stText"], 
@@ -65,29 +66,34 @@ div[data-testid="stText"],
     white-space: normal !important;
 }
 
-/* Header Polish */
 .stApp h1, .stApp h2, .stApp h3 {
     font-weight: 700 !important;
     letter-spacing: -0.02em !important;
 }
 
-/* Theme-adaptive expander cards */
 div[data-testid="stExpander"] {
     border: 1px solid var(--secondary-background-color) !important;
     border-radius: 10px !important;
     background-color: var(--background-color) !important;
 }
 
-/* Button UI styling */
 div[data-testid="stButton"] > button {
     border-radius: 8px !important;
     font-weight: 600 !important;
     font-size: 0.95rem !important;
 }
 
-/* Material Icons protection */
 [data-testid="stIcon"], i, [class*="Material"] {
     font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
+}
+
+/* Live Clock Badge Styling */
+.live-clock-badge {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 500;
+    opacity: 0.85;
+    margin-top: 4px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -107,7 +113,6 @@ def extract_user_identity():
     except Exception:
         pass
 
-    # Extract clean Name and Surname from email prefix if name claim is empty
     if user_email and not user_name:
         name_part = user_email.split("@")[0]
         tokens = name_part.split(".")
@@ -115,11 +120,7 @@ def extract_user_identity():
 
     return user_email, user_name or "Teacher User"
 
-# --- UI HEADER & LIVE TIMESTAMP ---
-now_ts = datetime.datetime.now()
-formatted_date = now_ts.strftime("%B %d, %Y")
-formatted_time = now_ts.strftime("%H:%M:%S")
-
+# --- UI HEADER & LIVE ISTANBUL CLOCK ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 with col_logo:
     try:
@@ -130,7 +131,31 @@ with col_logo:
 with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
-    st.caption(f"📅 **Date:** {formatted_date} | 🕒 **Time:** {formatted_time}")
+    
+    # Real-time ticking JavaScript clock anchored to Europe/Istanbul timezone
+    st.components.v1.html("""
+    <div id="clock" style="font-family: 'Inter', system-ui, sans-serif; font-size: 0.9rem; font-weight: 600; color: #707070;">
+      📍 Loading Istanbul Time...
+    </div>
+    <script>
+    function updateIstanbulClock() {
+        const options = { 
+            timeZone: 'Europe/Istanbul', 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric', 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit', 
+            hour12: false 
+        };
+        const formatter = new Intl.DateTimeFormat('en-US', options);
+        document.getElementById('clock').innerHTML = '🇹🇷 <b>Istanbul Local Time:</b> ' + formatter.format(new Date());
+    }
+    setInterval(updateIstanbulClock, 1000);
+    updateIstanbulClock();
+    </script>
+    """, height=35)
 
 st.markdown("---")
 
@@ -159,12 +184,13 @@ def check_authentication():
         st.stop()
 
     is_admin = user_email in ADMIN_EMAILS
+    now_ist = datetime.datetime.now(ISTANBUL_TZ)
 
     with st.sidebar:
         st.markdown(f"### 👤 **User Profile**")
         st.markdown(f"**Name:** {user_name}")
         st.markdown(f"**Email:** `{user_email}`")
-        st.caption(f"🕒 **Logged in at:** {formatted_time}")
+        st.caption(f"🕒 **Session Start (IST):** {now_ist.strftime('%H:%M:%S')}")
         st.divider()
 
         if is_admin:
@@ -215,8 +241,9 @@ def get_google_sheet():
 def save_grade(teacher_name, teacher_email, student, assignment, score, word_count):
     try:
         sheet = get_google_sheet()
-        date_stamp = datetime.datetime.now().strftime("%Y-%m-%d")
-        time_stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        now_ist = datetime.datetime.now(ISTANBUL_TZ)
+        date_stamp = now_ist.strftime("%Y-%m-%d")
+        time_stamp = now_ist.strftime("%H:%M:%S")
         sheet.append_row([date_stamp, time_stamp, teacher_name, teacher_email, student, assignment, score, word_count])
     except Exception:
         pass 
@@ -440,8 +467,10 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
 
             save_grade(USER_NAME, USER_EMAIL, student_identifier, assignment_type, final_score, word_count)
 
+            now_ist_str = datetime.datetime.now(ISTANBUL_TZ).strftime('%Y-%m-%d at %H:%M:%S (TRT)')
+
             with st.expander(f"✅ Graded: {student_identifier} | Final Score: {final_score}", expanded=True):
-                st.caption(f"Evaluated by: {USER_NAME} ({USER_EMAIL}) on {datetime.datetime.now().strftime('%Y-%m-%d at %H:%M:%S')}")
+                st.caption(f"Evaluated by: **{USER_NAME}** (`{USER_EMAIL}`) on {now_ist_str}")
                 
                 if score_diff >= 10:
                     st.warning(f"⚠️ **High Discrepancy Alert:** Models differed by {score_diff} pts. Manual review advised.")
