@@ -7,16 +7,17 @@ import sqlite3
 import re
 
 # --- PAGE SETTINGS & BRANDING ---
-# initial_sidebar_state="collapsed" hides the sidebar on load, but keeps the arrow!
+# initial_sidebar_state="collapsed" hides it by default but keeps the arrow working perfectly!
 st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 
-# Injecting SAFE Custom CSS
+# Injecting HIGHLY SAFE Custom CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
     
-    /* Safely apply font ONLY to text elements */
-    p, h1, h2, h3, h4, h5, h6, li, label, span {
+    /* Safely apply font ONLY to paragraphs and headers. 
+       We leave spans and labels alone so Streamlit's double-arrow and icons don't break! */
+    p, h1, h2, h3, h4, h5, h6 {
         font-family: 'Roboto', sans-serif !important;
     }
     
@@ -35,7 +36,7 @@ st.markdown("""
         color: #0055A5 !important; 
     }
     
-    /* Target ONLY the primary action buttons */
+    /* Target ONLY the primary blue evaluation button */
     button[kind="primary"] { 
         background-color: #0055A5 !important; 
         color: white !important; 
