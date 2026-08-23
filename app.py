@@ -166,7 +166,7 @@ with col_title:
 
 st.markdown("---")
 
-# --- AUTHENTICATION & DIAGNOSTICS SIDEBAR ---
+# --- AUTHENTICATION & SIDEBAR ---
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
 
@@ -246,7 +246,7 @@ def check_authentication():
 
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
-# --- GOOGLE WORKSPACE APIS ---
+# --- GOOGLE WORKSPACE INTEGRATION ---
 def get_google_credentials():
     if "google_credentials" not in st.secrets:
         return None
@@ -289,7 +289,7 @@ def save_grade(teacher_name, teacher_email, student, assignment, score, word_cou
     except Exception:
         pass 
 
-# --- PARSING & SCORE UTILITIES ---
+# --- PARSING & SCORE DETECTOR ---
 def parse_json_response(raw_text):
     clean_text = raw_text.strip()
     fence = chr(96) * 3
@@ -431,7 +431,7 @@ def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"Claude-Sonnet Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# --- DASHBOARD STATS ---
+# --- DASHBOARD METRICS ---
 st.markdown(f"### 👋 Welcome back, **{USER_NAME}**")
 hm1, hm2, hm3 = st.columns(3)
 hm1.metric("Papers Graded (Session)", f"{st.session_state.graded_count} / {MAX_PAPERS_PER_SESSION}")
@@ -502,6 +502,32 @@ with wizard_tab1:
         rubric_source = st.radio("Rubric Source", ["Use Default Rubric", "Upload Custom CSV Rubric"], horizontal=True)
 
         if rubric_source == "Upload Custom CSV Rubric":
+            # EMBEDDED STEP-BY-STEP INSTRUCTIONAL GUIDE
+            with st.expander("📖 **How to Create & Upload a Custom Rubric (Step-by-Step Guide)**", expanded=True):
+                st.markdown("""
+                Creating and uploading a custom rubric takes just a few minutes using any spreadsheet software like Microsoft Excel, Google Sheets, or Apple Numbers.
+
+                **1. Create and Save Your CSV Rubric**
+                * Open Excel or Google Sheets and create a table with your evaluation criteria.
+                * Include these required columns in Row 1:
+                  * **Criteria**: Name of the skill (e.g., *Vocabulary*, *Structure*).
+                  * **Max Score** (or **Points**): Total points for that criterion (numeric values only, e.g., `30`, `35`).
+                  * **Description / Performance Levels**: Explanations or scale descriptors (e.g., *Level 1*, *Level 2*, *Level 3*).
+                * Export the file:
+                  * **Google Sheets:** Go to **File > Download > Comma-separated values (.csv)**.
+                  * **Excel:** Go to **File > Save As > CSV (Comma delimited) (*.csv)**.
+
+                **2. Upload to the App**
+                * Open the **Mark My Words** app and navigate to **Step 1: Prompt & Rubric Setup**.
+                * Select **Custom Assignment** under **Assignment Type** (or choose your preferred template).
+                * Under **Rubric Source**, click the radio button for **Upload Custom CSV Rubric**.
+                * Click **Browse files** or drag and drop your saved `.csv` file directly into the upload area below.
+
+                **3. Verify System Detection**
+                * Check the preview table on screen to verify that your criteria and descriptions render clearly.
+                * Review the **Total Evaluation Scale** input box. The system automatically sums your `Max Score` column (e.g., 35 + 35 + 30 = 100) and saves this rubric configuration to your session state.
+                """)
+
             custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric File", type=["csv"])
             if custom_rubric_file:
                 try:
