@@ -158,7 +158,7 @@ with col1:
                     st.error(f"Missing default rubric: {filename}. Please upload one in the sidebar.")
                     st.stop()
                     
-            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(model="gemini-3.1-pro-preview", contents=[prompt, document_part])
             
             for pdf_file in uploaded_pdfs:
                 student_identifier = pdf_file.name.replace('.pdf', '')
