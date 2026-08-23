@@ -76,7 +76,63 @@ def get_secret(key_name):
     if hasattr(st, "secrets") and key_name in st.secrets:
         return st.secrets[key_name]
     return os.environ.get(key_name, None)
+    
+# --- IDENTITY & AUTHENTICATION HELPERS ---
+def extract_user_identity():
+    user_email, user_name = "", ""
+    try:
+        user_email = getattr(st.user, "email", "") or st.user.get("email", "")
+        user_name = getattr(st.user, "name", "") or st.user.get("name", "")
+    except Exception:
+        pass
 
+    if user_email and not user_name:
+        name_part = user_email.split("@")[0]
+        user_name = " ".join([t.capitalize() for t in name_part.split(".")])
+
+    if user_email:
+        st.session_state.auth_user = {"email": user_email, "name": user_name or "Teacher User"}
+    elif st.session_state.get("auth_user"):
+        user_email = st.session_state.auth_user.get("email", "")
+        user_name = st.session_state.auth_user.get("name", "")
+
+    return user_email, user_name or "Teacher User"
+
+def check_authentication():
+    is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
+
+    if not is_logged_in and not st.session_state.get("auth_user"):
+        st.warning("🔒 **Restricted Access:** Teacher Portal Only")
+        st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the portal.")
+        if st.button("Log in with Google", type="primary", use_container_width=True): 
+            st.login("google")
+        st.stop()
+
+    user_email, user_name = extract_user_identity()
+    admin_list = ADMIN_EMAILS if isinstance(ADMIN_EMAILS, list) else [ADMIN_EMAILS]
+    is_admin = any(str(admin).strip().lower() == user_email.strip().lower() for admin in admin_list)
+
+    if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
+        st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
+        if st.button("Sign out", type="primary", use_container_width=True):
+            st.session_state.auth_user = None
+            st.logout()
+        st.stop()
+
+    with st.sidebar:
+        # Sidebar layout content...
+        pass
+
+    return is_admin, user_email, user_name
+
+# --- EXECUTE AUTHENTICATION (MUST BE BELOW THE DEFINITIONS ABOVE) ---
+IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
+
+# --- LOG USER LOGIN (ONCE PER SESSION) ---
+if not st.session_state.get("user_session_logged", False):
+    st.session_state.user_session_logged = True
+    log_user_login(USER_NAME, USER_EMAIL)
+    
 # --- EXECUTE AUTHENTICATION ---
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
