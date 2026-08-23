@@ -194,6 +194,9 @@ def check_authentication():
             st.logout()
 
     return is_admin, user_email, user_name
+    
+# ADD THIS LINE RIGHT HERE:
+IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
 # --- GOOGLE WORKSPACE INTEGRATION ---
 def get_google_credentials():
