@@ -328,10 +328,10 @@ def run_groq_structured(client, user_prompt, extracted_text):
             "word_count": 0
         }
         
+    # Active, stable Groq production models
     groq_models = [
         "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
+        "llama-3.1-8b-instant"
     ]
     
     last_err = ""
@@ -356,7 +356,7 @@ def run_groq_structured(client, user_prompt, extracted_text):
         "is_valid_submission": False, 
         "rejection_reason": f"Groq Error: {last_err}", 
         "total_score": 0, 
-        "word_count": len(extracted_text.split())
+        "word_count": len(extracted_text.split()) if extracted_text else 0
     }
     
 # --- DASHBOARD METRICS ---
