@@ -56,7 +56,28 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+# --- SECURITY GATE ---
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
 
+    if not st.session_state.authenticated:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.warning("🔒 **Restricted Access:** Teacher Portal Only")
+            password = st.text_input("Enter School Passcode:", type="password")
+            if st.button("Login", type="primary", use_container_width=True):
+                # CHANGE "ISTEKTEACHER" TO WHATEVER PASSWORD YOU WANT
+                if password == "ISTEKTEACHER": 
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("😕 Incorrect passcode.")
+        st.stop()  # Do not continue running the rest of the app!
+
+# Call the security check before anything else loads
+check_password()
 # --- DATABASE SETUP ---
 def init_db():
     conn = sqlite3.connect('gradebook.db')
