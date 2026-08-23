@@ -5,7 +5,7 @@ import json
 import datetime
 import base64
 import html
-import mimetypes
+import mimetype
 import zipfile
 import io
 import time
@@ -668,7 +668,7 @@ with wizard_tab1:
                             g_client = genai.Client(api_key=gemini_key)
                             doc_part = types.Part.from_bytes(data=q_bytes, mime_type=q_mtype)
                             response = g_client.models.generate_content(
-                                model="gemini-2.5-flash",
+                                model="gemini-3.6-flash",
                                 contents=["Extract and transcribe the essay prompt or question text from this document/image perfectly. Return ONLY the extracted text.", doc_part]
                             )
                             active_q = response.text.strip()
@@ -801,11 +801,11 @@ Total Rubric Scale: Out of {st.session_state.total_rubric_scale} points.
             status_box.write(f"📄 Processing **{file.name}** ({idx+1}/{len(active_files)})...")
             upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mtype)
 
-            res_gemini_primary = run_gemini_structured(gemini_client, "gemini-2.5-flash", user_prompt, file_bytes, mtype) if gemini_client else {}
+            res_gemini_primary = run_gemini_structured(gemini_client, "gemini-3.6-flash", user_prompt, file_bytes, mtype) if gemini_client else {}
             extracted_text = file_bytes.decode("utf-8", errors="ignore") if mtype.startswith("text/") else res_gemini_primary.get("transcribed_text", "")
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                f_g25 = executor.submit(run_gemini_structured, gemini_client, "gemini-2.5-flash", user_prompt, file_bytes, mtype) if gemini_client else None
+                f_g25 = executor.submit(run_gemini_structured, gemini_client, "gemini-3.6-flash", user_prompt, file_bytes, mtype) if gemini_client else None
                 f_groq = executor.submit(run_groq_structured, groq_client, user_prompt, extracted_text) if groq_client else None
 
                 res_g25 = f_g25.result() if f_g25 else {}
