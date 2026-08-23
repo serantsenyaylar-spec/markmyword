@@ -398,27 +398,88 @@ wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
 
 # --- TAB 1: SETUP ---
 with wizard_tab1:
-    # 1. Live Computer Local Time Header Widget
-    st.components.v1.html("""
-        <div style="background: rgba(128,128,128,0.08); border: 1px solid rgba(128,128,128,0.2); border-radius: 10px; padding: 10px 16px; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 1.2rem;">🕒</span>
-                <span style="font-weight: 600; font-size: 0.95rem; opacity: 0.9;">Connected Computer Local Time:</span>
+    
+    # ==============================================================================
+    # PASTE / REPLACE THE CLOCK HERE (FIRST ITEM IN TAB 1):
+    # ==============================================================================
+    st.components.v1.html(
+        """
+        <div style="
+            background: rgba(128, 128, 128, 0.06);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(128, 128, 128, 0.18);
+            border-radius: 14px;
+            padding: 10px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+        ">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                    <span style="
+                        width: 10px;
+                        height: 10px;
+                        background-color: #10b981;
+                        border-radius: 50%;
+                        display: inline-block;
+                        box-shadow: 0 0 10px #10b981;
+                    "></span>
+                    <span style="
+                        position: absolute;
+                        width: 18px;
+                        height: 18px;
+                        background-color: rgba(16, 185, 129, 0.4);
+                        border-radius: 50%;
+                        animation: pulse 2s infinite ease-in-out;
+                    "></span>
+                </div>
+                <div>
+                    <div style="font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; opacity: 0.65; margin-bottom: 2px;">Local Time</div>
+                    <div id="clock-date" style="font-size: 0.88rem; font-weight: 600; opacity: 0.9;">Loading...</div>
+                </div>
             </div>
-            <div id="live-clock" style="font-family: monospace; font-weight: 700; font-size: 1.05rem; color: #0d6efd;">Loading...</div>
+            <div id="clock-time" style="
+                font-family: 'JetBrains Mono', 'Fira Code', Monaco, monospace;
+                font-size: 1.4rem;
+                font-weight: 800;
+                letter-spacing: -0.02em;
+                background: linear-gradient(135deg, #2563eb, #3b82f6);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            ">
+                00:00:00
+            </div>
         </div>
+
+        <style>
+            @keyframes pulse {
+                0% { transform: scale(0.6); opacity: 0.8; }
+                50% { transform: scale(1.4); opacity: 0.2; }
+                100% { transform: scale(0.6); opacity: 0.8; }
+            }
+        </style>
+
         <script>
             function updateClock() {
                 const now = new Date();
-                const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' };
-                document.getElementById('live-clock').innerText = now.toLocaleString(undefined, options);
+                const dateOptions = { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' };
+                const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+                
+                document.getElementById('clock-date').innerText = now.toLocaleDateString(undefined, dateOptions);
+                document.getElementById('clock-time').innerText = now.toLocaleTimeString(undefined, timeOptions);
             }
             updateClock();
             setInterval(updateClock, 1000);
         </script>
-    """, height=65)
+        """,
+        height=75,
+    )
 
     st.markdown("#### ⚡ Quick Assignment Presets")
+    # ... (rest of Tab 1 follows below) ...
     qc1, qc2, qc3 = st.columns(3)
     with qc1:
         if st.button("📝 B1 Guided Essay\n(120–150 words)", use_container_width=True):
