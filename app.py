@@ -5,6 +5,8 @@ import re
 import json
 import datetime
 from io import BytesIO
+
+# API Integrations
 from google import genai
 from google.genai import types
 from openai import OpenAI
@@ -20,34 +22,16 @@ SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
 # --- PAGE SETTINGS & BRANDING ---
 st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 
-# Injecting Custom CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
-    
     p, h1, h2, h3, h4, h5, h6 { font-family: 'Roboto', sans-serif !important; }
     [data-testid="stAppViewContainer"] { background-color: #FFFFFF !important; }
     [data-testid="stSidebar"] { background-color: #F8F9FA !important; }
-    
     h1, h2, h3, h4, h5, h6 { color: #0055A5 !important; }
-    
-    button[kind="primary"] { 
-        background-color: #0055A5 !important; 
-        color: white !important; 
-        border-radius: 8px !important; 
-        border: none !important; 
-        font-weight: 700 !important;
-    }
-    button[kind="primary"]:hover { 
-        background-color: #98D2C9 !important; 
-        color: #0055A5 !important; 
-    }
-    
-    .gradebook-header { 
-        color: #0055A5; 
-        border-bottom: 2px solid #98D2C9; 
-        padding-bottom: 10px; 
-    }
+    button[kind="primary"] { background-color: #0055A5 !important; color: white !important; border-radius: 8px !important; border: none !important; font-weight: 700 !important; }
+    button[kind="primary"]:hover { background-color: #98D2C9 !important; color: #0055A5 !important; }
+    .gradebook-header { color: #0055A5; border-bottom: 2px solid #98D2C9; padding-bottom: 10px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -73,7 +57,13 @@ check_password()
 
 # --- GOOGLE SERVICES INTEGRATION ---
 def get_google_credentials():
-    creds_json = json.loads(st.secrets["google_credentials"])
+    # Safely handle Streamlit secrets whether they are saved as a JSON string or a TOML dictionary
+    creds_secret = st.secrets["google_credentials"]
+    if isinstance(creds_secret, str):
+        creds_json = json.loads(creds_secret)
+    else:
+        creds_json = dict(creds_secret)
+        
     scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
     return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
 
@@ -112,7 +102,7 @@ def load_grades():
 
 # --- SIDEBAR: SETTINGS ---
 st.sidebar.header("⚙️ App Settings")
-st.sidebar.success("✅ Multi-Model Consensus Active (Gemini + GPT-4o)")
+st.sidebar.success("✅ Dual-Consensus Engine Active")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 Custom Rubric")
 custom_rubric_file = st.sidebar.file_uploader("Upload Custom CSV Rubric", type=["csv"])
@@ -142,7 +132,6 @@ with col1:
         if not uploaded_pdfs:
             st.error("Please upload at least one PDF file.")
         else:
-            # Rubric Setup
             if custom_rubric_file:
                 rubric_text = pd.read_csv(custom_rubric_file).to_string()
             else:
@@ -153,8 +142,9 @@ with col1:
                     st.error(f"Missing default rubric: {filename}. Please upload one in the sidebar.")
                     st.stop()
                     
-            # Initialize AI Clients
+            # Initialize API Clients
             gemini_client = genai.Client(api_key=st.secrets["gemini_api_key"])
+            openai_client = OpenAI(api_key=st.secrets["openai_api_key"])
             
             for pdf_file in uploaded_pdfs:
                 student_identifier = pdf_file.name.replace('.pdf', '')
@@ -163,8 +153,7 @@ with col1:
                 with st.spinner(f"Saving {pdf_file.name} to Drive..."):
                     upload_pdf_to_drive(pdf_bytes, pdf_file.name, DRIVE_FOLDER_ID)
                 
-                with st.spinner(f"Evaluating {pdf_file.name} (Multi-Model consensus)..."):
-                    # The Prompt
+                with st.spinner(f"Running Multi-Model Consensus on {pdf_file.name}..."):
                     prompt = f"""
                     You are an expert high school English teacher evaluating a B1+ writing assignment.
                     Assignment Type: {assignment_type}
@@ -196,38 +185,85 @@ with col1:
                     """
 
                     try:
-                        # 1. Primary Pass: Gemini 3.1 Pro 
+                        # ==========================================
+                        # PASS 1: GEMINI 3.1 PRO 
+                        # ==========================================
                         document_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
                         gemini_response = gemini_client.models.generate_content(
                             model="gemini-3.1-pro-preview", 
                             contents=[prompt, document_part]
                         )
-                        full_text = gemini_response.text
+                        gemini_text = gemini_response.text
                         
-                        # Note: If you want to use the GPT-4o output to actively change the final score,
-                        # you can add the API call here and feed both into a final reconciliation prompt!
-                        
-                        # Parsing the output
-                        score = "0"
+                        gemini_score = 0
                         word_count = "N/A"
-                        if "DATA_ROW:" in full_text:
-                            data_line = full_text.split("DATA_ROW:")[-1].strip()
+                        if "DATA_ROW:" in gemini_text:
+                            data_line = gemini_text.split("DATA_ROW:")[-1].strip()
                             parts = data_line.split("|")
                             if len(parts) >= 2:
-                                score_str = parts[0].strip()
-                                num_match = re.search(r'\d+(\.\d+)?', score_str)
-                                if num_match:
-                                    score = num_match.group()
+                                match = re.search(r'\d+(\.\d+)?', parts[0].strip())
+                                if match: gemini_score = float(match.group())
                                 word_count = parts[1].strip()
+
+                        # ==========================================
+                        # PASS 2: GPT-4o 
+                        # ==========================================
+                        uploaded_file = openai_client.files.create(
+                            file=(pdf_file.name, pdf_bytes, "application/pdf"),
+                            purpose="user_data"
+                        )
                         
-                        display_text = full_text.split("DATA_ROW:")[0].strip()
+                        gpt_response = openai_client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": prompt},
+                                        {"type": "file", "file": {"file_id": uploaded_file.id}}
+                                    ]
+                                }
+                            ]
+                        )
+                        gpt_text = gpt_response.choices[0].message.content
                         
-                        # Save to Google Sheets
-                        save_grade(student_identifier, assignment_type, float(score), word_count)
+                        # Cleanup to protect student privacy
+                        openai_client.files.delete(uploaded_file.id)
+
+                        gpt_score = 0
+                        if "DATA_ROW:" in gpt_text:
+                            data_line = gpt_text.split("DATA_ROW:")[-1].strip()
+                            parts = data_line.split("|")
+                            if len(parts) >= 1:
+                                match = re.search(r'\d+(\.\d+)?', parts[0].strip())
+                                if match: gpt_score = float(match.group())
+
+                        # ==========================================
+                        # CONSENSUS & OUTPUT
+                        # ==========================================
+                        score_diff = abs(gemini_score - gpt_score)
+                        final_score = round((gemini_score + gpt_score) / 2, 1)
                         
-                        # Display Results
-                        with st.expander(f"✅ Graded: {student_identifier} (Score: {score})", expanded=False):
-                            st.markdown(display_text)
+                        save_grade(student_identifier, assignment_type, final_score, word_count)
+                        
+                        with st.expander(f"✅ Graded: {student_identifier} | Final Score: {final_score}", expanded=False):
+                            
+                            # Discrepancy Alert Feature
+                            if score_diff >= 10:
+                                st.warning(f"⚠️ **High Discrepancy Alert:** The models disagreed by {score_diff} points. Manual review recommended.")
+                            else:
+                                st.success(f"Models in consensus (Difference: {score_diff} points).")
+                                
+                            st.markdown(f"**Gemini 3.1 Pro Score:** {gemini_score} | **GPT-4o Score:** {gpt_score}")
+                            st.divider()
+                            
+                            st.markdown("### 🤖 Gemini Evaluation")
+                            st.markdown(gemini_text.split("DATA_ROW:")[0].strip())
+                            
+                            st.divider()
+                            
+                            st.markdown("### 🧠 GPT-4o Evaluation")
+                            st.markdown(gpt_text.split("DATA_ROW:")[0].strip())
                             
                     except Exception as e:
                         st.error(f"Failed to grade {pdf_file.name}: {str(e)}")
@@ -239,13 +275,11 @@ with col2:
     df_grades = load_grades()
     
     if not df_grades.empty:
-        # Standardize DataFrame column names for the dashboard UI
         if len(df_grades.columns) >= 5:
             df_grades.columns = ["Timestamp", "Student", "Assignment", "Score", "Word Count"]
             
         col_avg, col_count = st.columns(2)
         
-        # Safely calculate average
         df_grades["Score"] = pd.to_numeric(df_grades["Score"], errors='coerce')
         avg_score = df_grades["Score"].mean()
         
