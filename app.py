@@ -155,12 +155,26 @@ def check_authentication():
             st.logout()
         st.stop()
 
-    with st.sidebar:
+   with st.sidebar:
+        # 1. Connection Status Badge
+        st.markdown("""
+        <div style="background-color: rgba(40, 167, 69, 0.12); border: 1px solid #28a745; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
+            <span style="height: 10px; width: 10px; background-color: #28a745; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px #28a745;"></span>
+            <span style="color: #28a745; font-weight: 700; font-size: 0.85rem;">Connection: Active</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 2. Account Details (First Name, Surname, Email)
+        name_parts = user_name.strip().split(" ", 1)
+        first_name = name_parts[0] if len(name_parts) > 0 else "Teacher"
+        surname = name_parts[1] if len(name_parts) > 1 else "—"
+
         st.markdown("### 👤 **Account Details**")
         st.markdown(f"""
-        <div class="user-card">
-            <div class="user-card-name">👤 {html.escape(user_name)}</div>
-            <div class="user-card-email">📧 {html.escape(user_email or 'Verified User')}</div>
+        <div class="user-card" style="background-color: var(--secondary-background-color); padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); margin-bottom: 15px;">
+            <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>First Name:</b> {html.escape(first_name)}</div>
+            <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>Surname:</b> {html.escape(surname)}</div>
+            <div style="font-size: 0.82rem; opacity: 0.85; word-break: break-all;"><b>Mail:</b> {html.escape(user_email or 'Verified User')}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -171,14 +185,29 @@ def check_authentication():
                 st.session_state.graded_results = []
                 st.rerun()
         else:
-            st.success("✅ **Teacher Status: Active**")
-            st.caption(f"Session Usage: {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
+            st.info(f"📊 **Session Usage:** {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
 
         st.divider()
-        st.markdown("### 📁 **Workspace Links**")
-        st.markdown("☁️ [**Google Drive**](https://drive.google.com)")
-        st.markdown("📊 [**Google Sheets**](https://docs.google.com/spreadsheets/)")
-        
+
+        # 3. Google Workspace Quick Links
+        st.markdown("### 🌐 **Workspace Links**")
+
+        workspace_links = [
+            {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg"},
+            {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/1/12/Google_Drive_icon_%282020%29.svg"},
+            {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/ae/Google_Sheets_2020_Logo.svg"},
+            {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://upload.wikimedia.org/wikipedia/commons/4/47/Google_Docs_2020_Logo.svg"},
+            {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg"}
+        ]
+
+        for item in workspace_links:
+            st.markdown(f"""
+            <a href="{item['url']}" target="_blank" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 6px 8px; border-radius: 6px;">
+                <img src="{item['icon']}" width="20" height="20" style="object-fit: contain;"/>
+                <span style="font-size: 0.9rem; font-weight: 500;">{item['name']}</span>
+            </a>
+            """, unsafe_allow_html=True)
+
         st.divider()
         if st.button("Log out", use_container_width=True):
             st.session_state.auth_user = None
