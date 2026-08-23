@@ -328,12 +328,27 @@ def run_groq_structured(client, user_prompt, extracted_text):
             "word_count": 0
         }
         
-    # Active, stable Groq production models
-    groq_models = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant"
-    ]
-    
+    # Dynamically fetch currently available models from Groq API
+    groq_models = []
+    try:
+        available_models = [m.id for m in client.models.list().data]
+        # Filter for active text generation models
+        groq_models = [
+            m for m in available_models 
+            if not any(x in m.lower() for x in ["whisper", "guard", "audio", "orpheus", "vision"])
+        ]
+    except Exception:
+        pass
+
+    # Fallback list if dynamic listing fails or is empty
+    if not groq_models:
+        groq_models = [
+            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-120b",
+            "qwen/qwen3.6-27b"
+        ]
+
     last_err = ""
     for model_name in groq_models:
         try:
