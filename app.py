@@ -3,21 +3,22 @@ from google import genai
 from google.genai import types
 import pandas as pd
 import os
-import sqlite3
 import re
 import json
 from io import BytesIO
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+import gspread
 
-# ⚠️ PASTE YOUR GOOGLE DRIVE FOLDER ID HERE
-DRIVE_FOLDER_ID = "https://drive.google.com/drive/u/0/folders/1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
+# --- GOOGLE RESOURCE IDs ---
+DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
 SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
+
 # --- PAGE SETTINGS & BRANDING ---
 st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 
-# Injecting HIGHLY SAFE Custom CSS
+# Injecting Custom CSS
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
@@ -48,84 +49,76 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- GOOGLE DRIVE UPLOAD FUNCTION ---
+# --- SECURITY GATE ---
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.warning("🔒 **Restricted Access:** Teacher Portal Only")
+            password = st.text_input("Enter School Passcode:", type="password")
+            if st.button("Login", type="primary", use_container_width=True):
+                if password == st.secrets["app_password"]: 
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("😕 Incorrect passcode.")
+        st.stop()
+
+check_password()
+
+# --- GOOGLE SERVICES INTEGRATION ---
+def get_google_credentials():
+    creds_json = json.loads(st.secrets["google_credentials"])
+    scopes = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+    return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
+
 def upload_pdf_to_drive(pdf_bytes, file_name, folder_id):
     try:
-        creds_json = json.loads(st.secrets["google_credentials"])
-        creds = service_account.Credentials.from_service_account_info(
-            creds_json, scopes=['https://www.googleapis.com/auth/drive.file']
-        )
+        creds = get_google_credentials()
         service = build('drive', 'v3', credentials=creds)
-        
-        file_metadata = {
-            'name': file_name,
-            'parents': [folder_id]
-        }
-        
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
         media = MediaIoBaseUpload(BytesIO(pdf_bytes), mimetype='application/pdf', resumable=True)
-        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         return True
     except Exception as e:
-        st.error(f"Google Drive Upload Error for {file_name}: {str(e)}")
+        st.error(f"Google Drive Upload Error: {str(e)}")
         return False
 
-# --- DATABASE SETUP ---
-def init_db():
-    conn = sqlite3.connect('gradebook.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS grades 
-                 (id INTEGER PRIMARY KEY, student TEXT, assignment TEXT, score REAL, word_count TEXT)''')
-    conn.commit()
-    conn.close()
+def get_google_sheet():
+    creds = get_google_credentials()
+    client = gspread.authorize(creds)
+    return client.open_by_key(SHEET_ID).sheet1
 
 def save_grade(student, assignment, score, word_count):
-    conn = sqlite3.connect('gradebook.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO grades (student, assignment, score, word_count) VALUES (?, ?, ?, ?)", 
-              (student, assignment, score, word_count))
-    conn.commit()
-    conn.close()
+    try:
+        sheet = get_google_sheet()
+        sheet.append_row([student, assignment, score, word_count])
+    except Exception as e:
+        st.error(f"Failed to save to Google Sheets: {e}")
 
 def load_grades():
-    conn = sqlite3.connect('gradebook.db')
-    df = pd.read_sql_query("SELECT student as 'Student', assignment as 'Assignment', score as 'Score', word_count as 'Word Count' FROM grades", conn)
-    conn.close()
-    return df
-
-def clear_db():
-    conn = sqlite3.connect('gradebook.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM grades")
-    conn.commit()
-    conn.close()
-
-init_db()
+    try:
+        sheet = get_google_sheet()
+        records = sheet.get_all_records()
+        return pd.DataFrame(records)
+    except:
+        return pd.DataFrame()
 
 # --- SIDEBAR: SETTINGS ---
 st.sidebar.header("⚙️ App Settings")
-api_key = st.sidebar.text_input("Enter Gemini API Key:", value="", type="password")
-
+st.sidebar.success("✅ Connected to Google Cloud & Gemini 3.1 Pro")
 st.sidebar.markdown("---")
 st.sidebar.subheader("📂 Custom Rubric")
 custom_rubric_file = st.sidebar.file_uploader("Upload Custom CSV Rubric", type=["csv"])
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Clear Master Database", use_container_width=True):
-    clear_db()
-    st.sidebar.success("Database cleared!")
-    st.rerun()
 
 # --- UI HEADER ---
 col_logo, col_title = st.columns([1, 4])
 with col_logo:
     if os.path.exists("kurum_genel_logo_2_eng.png"):
         st.image("kurum_genel_logo_2_eng.png", use_container_width=True)
-    else:
-        uploaded_logo = st.file_uploader("Upload Logo Here to Save it:", type=["png", "jpg", "jpeg"])
-        if uploaded_logo:
-            with open("kurum_genel_logo_2_eng.png", "wb") as f:
-                f.write(uploaded_logo.getbuffer())
-            st.rerun()
 
 with col_title:
     st.title("Mark My Words")
@@ -143,9 +136,7 @@ with col1:
     uploaded_pdfs = st.file_uploader("Upload Scanned Student PDFs", type=["pdf"], accept_multiple_files=True)
     
     if st.button("Evaluate Papers", type="primary", use_container_width=True):
-        if not api_key:
-            st.error("Please open the sidebar (top left arrow) and enter your API Key.")
-        elif not uploaded_pdfs:
+        if not uploaded_pdfs:
             st.error("Please upload at least one PDF file.")
         else:
             if custom_rubric_file:
@@ -158,17 +149,16 @@ with col1:
                     st.error(f"Missing default rubric: {filename}. Please upload one in the sidebar.")
                     st.stop()
                     
-            response = client.models.generate_content(model="gemini-3.1-pro-preview", contents=[prompt, document_part])
+            client = genai.Client(api_key=st.secrets["gemini_api_key"])
             
             for pdf_file in uploaded_pdfs:
                 student_identifier = pdf_file.name.replace('.pdf', '')
                 pdf_bytes = pdf_file.getvalue()
                 
-                # --- NEW: Upload to Google Drive ---
                 with st.spinner(f"Saving {pdf_file.name} to Drive..."):
                     upload_pdf_to_drive(pdf_bytes, pdf_file.name, DRIVE_FOLDER_ID)
                 
-                with st.spinner(f"Evaluating {pdf_file.name}..."):
+                with st.spinner(f"Evaluating {pdf_file.name} with Gemini 3.1 Pro..."):
                     prompt = f"""
                     You are an expert high school English teacher evaluating a B1+ writing assignment.
                     Assignment Type: {assignment_type}
@@ -201,7 +191,10 @@ with col1:
 
                     try:
                         document_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
-                        response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, document_part])
+                        response = client.models.generate_content(
+                            model="gemini-3.1-pro-preview", 
+                            contents=[prompt, document_part]
+                        )
                         
                         full_text = response.text
                         
@@ -218,6 +211,7 @@ with col1:
                                 word_count = parts[1].strip()
                         
                         display_text = full_text.split("DATA_ROW:")[0].strip()
+                        
                         save_grade(student_identifier, assignment_type, float(score), word_count)
                         
                         with st.expander(f"✅ Graded: {student_identifier} (Score: {score})", expanded=False):
