@@ -270,7 +270,7 @@ def detect_max_score(df):
                 pass
     return 100
 
-# --- EVALUATION RUNNERS WITH AUTO-FALLBACK ---
+# --- EVALUATION RUNNERS WITH UPDATED CURRENT MODELS ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
 Evaluate the student essay based STRICTLY on the provided rubric in <rubric_data> and the specific assignment prompt in <assignment_question>.
 
@@ -291,7 +291,8 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
 }"""
 
 def run_gemini_structured(client, preferred_model, user_prompt, file_bytes, mime_type):
-    models_to_try = [preferred_model, "gemini-2.0-flash", "gemini-1.5-flash"]
+    # Updated model cascade replacing deprecated endpoints
+    models_to_try = [preferred_model, "gemini-3.6-flash", "gemini-2.5-flash"]
     models_to_try = list(dict.fromkeys(models_to_try))
     
     last_err = ""
@@ -322,7 +323,8 @@ def run_groq_structured(client, user_prompt, extracted_text):
     if not extracted_text or not extracted_text.strip():
         return {"is_valid_submission": False, "rejection_reason": "Groq Error: Extracted text was empty.", "total_score": 0, "word_count": 0}
         
-    groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"]
+    # Updated model cascade using supported production Groq models
+    groq_models = ["llama-3.1-8b-instant", "llama-3.2-11b-vision-instruct", "llama-3.2-3b-preview"]
     last_err = ""
     for model_name in groq_models:
         try:
@@ -531,21 +533,21 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
             upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
 
             with st.spinner(f"🚀 Processing {file.name} across Active Models..."):
-                res_gemini_primary = run_gemini_structured(gemini_client, "gemini-2.0-flash", user_prompt, file_bytes, mime_type) if gemini_client else {"is_valid_submission": False, "rejection_reason": "Gemini API key missing"}
+                res_gemini_primary = run_gemini_structured(gemini_client, "gemini-3.6-flash", user_prompt, file_bytes, mime_type) if gemini_client else {"is_valid_submission": False, "rejection_reason": "Gemini API key missing"}
                 
                 if not extracted_text:
                     extracted_text = res_gemini_primary.get("transcribed_text", "")
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                    f_gemini_sec = executor.submit(run_gemini_structured, gemini_client, "gemini-1.5-flash", user_prompt, file_bytes, mime_type) if gemini_client else None
+                    f_gemini_sec = executor.submit(run_gemini_structured, gemini_client, "gemini-2.5-flash", user_prompt, file_bytes, mime_type) if gemini_client else None
                     f_groq = executor.submit(run_groq_structured, groq_client, user_prompt, extracted_text) if groq_client else None
 
                     res_gemini_sec = f_gemini_sec.result() if f_gemini_sec else {"is_valid_submission": False, "rejection_reason": "Gemini API key missing"}
                     res_groq = f_groq.result() if f_groq else {"is_valid_submission": False, "rejection_reason": "Groq API key missing"}
 
                 all_responses = {
-                    "Gemini 2.0 Flash": res_gemini_primary, 
-                    "Gemini 1.5 Flash": res_gemini_sec, 
+                    "Gemini 3.6 Flash": res_gemini_primary, 
+                    "Gemini 2.5 Flash": res_gemini_sec, 
                     "Groq Llama Engine": res_groq
                 }
                 
@@ -567,8 +569,8 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 transcribed_text = primary_res.get("transcribed_text", extracted_text)
                 feedback = primary_res.get("feedback", "N/A")
 
-                score_g20 = res_gemini_primary.get("total_score", "Skipped") if check_validity(res_gemini_primary) else "Skipped"
-                score_g15 = res_gemini_sec.get("total_score", "Skipped") if check_validity(res_gemini_sec) else "Skipped"
+                score_g36 = res_gemini_primary.get("total_score", "Skipped") if check_validity(res_gemini_primary) else "Skipped"
+                score_g25 = res_gemini_sec.get("total_score", "Skipped") if check_validity(res_gemini_sec) else "Skipped"
                 score_groq = res_groq.get("total_score", "Skipped") if check_validity(res_groq) else "Skipped"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, scale_val)
@@ -579,7 +581,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
 Final Consensus Score: {final_score} / {scale_val}
-Model Scores Summary: Gemini 2.0 Flash: {score_g20} | Gemini 1.5 Flash: {score_g15} | Groq Llama Engine: {score_groq}
+Model Scores Summary: Gemini 3.6 Flash: {score_g36} | Gemini 2.5 Flash: {score_g25} | Groq Llama Engine: {score_groq}
 ================================================================================
 Target Question / Prompt:
 {active_q}
@@ -603,9 +605,9 @@ Feedback:
                     "final_score": final_score,
                     "total_scale": scale_val,
                     "word_count": word_count,
-                    "scores": [score_g20, score_g15, score_groq],
-                    "res_g20": res_gemini_primary,
-                    "res_g15": res_gemini_sec,
+                    "scores": [score_g36, score_g25, score_groq],
+                    "res_g36": res_gemini_primary,
+                    "res_g25": res_gemini_sec,
                     "res_groq": res_groq,
                     "report_bytes": report_bytes,
                     "report_fn": report_fn,
@@ -657,14 +659,14 @@ with wizard_tab3:
                     st.markdown("#### 🎯 Evaluation Breakdown")
                     st.markdown(f"**Target Question:** *\"{item.get('question', 'N/A')}\"*")
                     st.markdown(f"**Final Score:** `{item['final_score']} / {scale_val}` | **Word Count:** `{item['word_count']}`")
-                    st.markdown(f"**Gemini 2.0 Flash:** {item['scores'][0]} | **Gemini 1.5 Flash:** {item['scores'][1]} | **Groq Llama:** {item['scores'][2]}")
+                    st.markdown(f"**Gemini 3.6 Flash:** {item['scores'][0]} | **Gemini 2.5 Flash:** {item['scores'][1]} | **Groq Llama:** {item['scores'][2]}")
 
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini 2.0 Flash", "⚡ Gemini 1.5 Flash", "🦙 Groq Llama Engine"])
-                    with t1: st.json(item['res_g20'])
-                    with t2: st.json(item['res_g15'])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini 3.6 Flash", "⚡ Gemini 2.5 Flash", "🦙 Groq Llama Engine"])
+                    with t1: st.json(item['res_g36'])
+                    with t2: st.json(item['res_g25'])
                     with t3: st.json(item['res_groq'])
 
 # --- FOOTER ---
