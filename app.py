@@ -24,13 +24,10 @@ from googleapiclient.http import MediaIoBaseUpload
 
 # --- SECRETS HELPER ---
 def get_secret(key_name):
-    try:
-        for k in st.secrets:
-            if k.lower() == key_name.lower():
-                return st.secrets[k]
-    except Exception:
-        pass
-    return os.environ.get(key_name) or os.environ.get(key_name.upper()) or ""
+    """Fetches secrets safely from Streamlit secrets or OS environment."""
+    if key_name in st.secrets:
+        return st.secrets[key_name]
+    return os.environ.get(key_name, None)
 
 # --- CONFIGURATION ---
 DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
@@ -227,40 +224,79 @@ def get_google_credentials():
     scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
     return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
 
-def upload_file_to_drive(file_bytes, file_name, folder_id, mime_type):
+def upload_file_to_drive(file_bytes, filename, folder_id, mime_type):
+    """Uploads the file to Google Drive."""
     try:
-        creds = get_google_credentials()
-        if not creds or not folder_id: 
-            return False
-        service = build('drive', 'v3', credentials=creds)
-        file_metadata = {'name': file_name, 'parents': [folder_id]}
-        media = MediaIoBaseUpload(BytesIO(file_bytes), mimetype=mime_type, resumable=True)
-        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        return True
-    except Exception: 
-        return False
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+        from google.oauth2 import service_account
+        import io
 
-def save_grade(teacher_name, teacher_email, student, assignment, score, word_count, total_scale):
+        if "gcp_service_account" not in st.secrets:
+            print(f"Skipping Drive Upload for {filename}: No GCP credentials found.")
+            return None
+            
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        service = build('drive', 'v3', credentials=credentials)
+        
+        file_metadata = {'name': filename, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
+        
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return file.get('id')
+    except Exception as e:
+        print(f"Drive Upload Error: {e}")
+        return None
+
+def save_grade(user_name, user_email, student_id, assignment_type, final_score, word_count, total_scale):
+    """Appends a new row to a Google Sheet with the grading results."""
     try:
-        creds = get_google_credentials()
-        if not creds or not SHEET_ID: return
+        import gspread
+        from google.oauth2.service_account import Credentials
+        
+        if "gcp_service_account" not in st.secrets:
+            print(f"Skipping Sheets Save for {student_id}: No GCP credentials found.")
+            return None
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
         client = gspread.authorize(creds)
-        sheet = client.open_by_key(SHEET_ID).sheet1
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
-        sheet.append_row([
-            now_utc.strftime("%Y-%m-%d"), 
-            now_utc.strftime("%H:%M:%S UTC"), 
-            teacher_name, teacher_email, student, assignment, f"{score}/{total_scale}", word_count
-        ])
-    except Exception: 
-        pass 
+        
+        # Replace this with the exact name or URL of your Google Sheet
+        sheet = client.open("İstek_Schools_Grading_Database").sheet1
+        
+        # Append the row
+        row = [user_name, user_email, student_id, assignment_type, final_score, total_scale, word_count]
+        sheet.append_row(row)
+    except Exception as e:
+        print(f"Sheets Save Error: {e}")
 
 # --- UI BADGES & HELPERS ---
-def get_score_badge(score, total):
-    pct = (score / total) * 100 if total > 0 else 0
-    bg, fg = ("#d1e7dd", "#0f5132") if pct >= 85 else (("#fff3cd", "#664d03") if pct >= 70 else ("#f8d7da", "#842029"))
-    return f'<span style="background-color: {bg}; color: {fg}; padding: 6px 14px; border-radius: 20px; font-weight: 700; font-size: 1.1rem; display: inline-block;">Score: {score} / {total} ({pct:.0f}%)</span>'
+def get_score_badge(score, max_score):
+    """Generates a colored HTML badge for Tab 3 based on the grade percentage."""
+    try:
+        percentage = (float(score) / float(max_score)) * 100 if max_score > 0 else 0
+    except:
+        percentage = 0
+        
+    if percentage >= 80:
+        color = "#2e7d32" # Green for good
+    elif percentage >= 60:
+        color = "#ed6c02" # Orange for average
+    else:
+        color = "#d32f2f" # Red for needs improvement
 
+    return f"""
+    <div style="background-color: {color}; color: white; padding: 15px; 
+                border-radius: 8px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <span style="font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px;">Final Grade</span><br>
+        <span style="font-size: 2rem; font-weight: bold;">{score} / {max_score}</span>
+    </div>
+    """
+    
 def scale_rubric_dataframe(df, target_scale):
     df_scaled = df.copy()
     possible_cols = ["max score", "max points", "points", "score", "max_score", "max_points", "weight"]
@@ -288,10 +324,16 @@ def detect_max_score(df):
             except Exception: pass
     return 100
 
-def check_validity(res_dict):
-    if not isinstance(res_dict, dict): return False
-    val = res_dict.get("is_valid_submission", False)
-    return val if isinstance(val, bool) else str(val).strip().lower() in ["true", "1", "yes"]
+def check_validity(result):
+    """Ensures the AI didn't hallucinate and returned the expected numbers."""
+    if not isinstance(result, dict) or not result:
+        return False
+    # Check if the core metric 'total_score' exists and is a number
+    if "total_score" not in result:
+        return False
+    if not isinstance(result["total_score"], (int, float)):
+        return False
+    return True
 
 # --- EVALUATION RUNNERS ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
@@ -313,63 +355,54 @@ Return your evaluation EXACTLY as a JSON object:
   "feedback": "..."
 }"""
 
-def run_gemini_structured(client, preferred_model, user_prompt, file_bytes, mime_type):
-    models_to_try = [preferred_model, "gemini-3.6-flash", "gemini-2.5-flash"]
-    last_err = ""
-    for model_name in list(dict.fromkeys(models_to_try)):
-        try:
-            if mime_type.startswith("text/"):
-                contents = [SYSTEM_PROMPT, f"{user_prompt}\n\nStudent Essay File:\n{file_bytes.decode('utf-8', errors='ignore')}"]
-            else:
-                doc_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
-                contents = [SYSTEM_PROMPT, user_prompt, doc_part]
-
-            response = client.models.generate_content(
-                model=model_name, 
-                contents=contents,
-                config=types.GenerateContentConfig(response_mime_type="application/json")
+def run_gemini_structured(client, model_name, user_prompt, file_bytes, mime_type):
+    """Runs Gemini Vision/Text with forced JSON output."""
+    try:
+        # Enforce the JSON schema we expect in TAB 2
+        sys_prompt = """You are an expert teacher grading an assignment. 
+        Analyze the document based on the rubric. You MUST output your response in valid JSON matching this exact structure:
+        {"total_score": float, "score_task_achievement": float, "score_organization": float, "score_accuracy": float, "word_count": int, "feedback": "string", "red_pen_corrections": "string", "transcribed_text": "string"}
+        """
+        
+        # Load the file bytes into the correct GenAI format
+        document_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        
+        # Call the model (Note: Ensure you use "gemini-1.5-flash" or "gemini-1.5-pro")
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[sys_prompt, user_prompt, document_part],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json" # Forces JSON generation
             )
-            res_dict = json.loads(response.text)
-            res_dict["model_used"] = model_name
-            return res_dict
-        except Exception as e:
-            last_err = str(e)
-            time.sleep(0.3)
-
-    return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        st.error(f"⚠️ Gemini Error: {str(e)}")
+        return {}
 
 def run_groq_structured(client, user_prompt, extracted_text):
-    if not extracted_text or not extracted_text.strip():
-        return {"is_valid_submission": False, "rejection_reason": "Groq Error: Extracted text was empty.", "total_score": 0, "word_count": 0}
-        
-    groq_models = []
+    """Runs Groq Llama/Mixtral with forced JSON output."""
     try:
-        available_models = [m.id for m in client.models.list().data]
-        groq_models = [m for m in available_models if not any(x in m.lower() for x in ["whisper", "guard", "audio", "vision"])]
-    except Exception: pass
+        sys_prompt = f"""You are an expert teacher grading an assignment. 
+        Evaluate the student's text below. 
+        Student Text: {extracted_text}
+        
+        You MUST output in valid JSON matching this exact structure:
+        {{"total_score": float, "score_task_achievement": float, "score_organization": float, "score_accuracy": float, "word_count": int, "feedback": "string", "red_pen_corrections": "string", "transcribed_text": "string"}}
+        """
 
-    if not groq_models:
-        groq_models = ["llama-3.3-70b-versatile", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
-
-    last_err = ""
-    for model_name in groq_models:
-        try:
-            res = client.chat.completions.create(
-                model=model_name,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"{user_prompt}\n\nStudent Essay Text:\n{extracted_text}"}
-                ]
-            )
-            res_dict = json.loads(res.choices[0].message.content)
-            res_dict["model_used"] = model_name
-            return res_dict
-        except Exception as e:
-            last_err = str(e)
-            continue
-
-    return {"is_valid_submission": False, "rejection_reason": f"Groq Error: {last_err}", "total_score": 0, "word_count": len(extracted_text.split())}
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            model="llama-3.1-8b-instant", # Or mixtral-8x7b-32768
+            response_format={"type": "json_object"}
+        )
+        return json.loads(chat_completion.choices[0].message.content)
+    except Exception as e:
+        st.error(f"⚠️ Groq Error: {str(e)}")
+        return {}
 
 # --- HEADER & STEPPER ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
