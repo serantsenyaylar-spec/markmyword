@@ -1,4 +1,5 @@
-streamlit
+streamlit>=1.42.0
+authlib>=1.3.2
 pandas
 google-genai
 openai
