@@ -25,12 +25,11 @@ SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
     page_icon="📝", 
-    layout="centered", # Changed from wide to centered for a cleaner single-column look
+    layout="centered", 
     initial_sidebar_state="collapsed"
 )
 
 # --- THEME-AWARE STYLING & TYPOGRAPHY ---
-# We keep Roboto but remove the strict font-size rules so Streamlit scales it beautifully
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
@@ -43,8 +42,30 @@ button[kind="primary"] {
     border-radius: 8px !important;
     font-weight: 600 !important;
 }
+
+/* 🔒 HIDE THE PASSWORD VISIBILITY EYE ICON 🔒 */
+[data-testid="stTextInput"] button, 
+button[aria-label="Show password"], 
+button[aria-label="Hide password"] {
+    display: none !important;
+    pointer-events: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
+
+# --- UI HEADER & LOGO (Moved up so it shows immediately) ---
+col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
+with col_logo:
+    try:
+        st.image("kurum_genel_logo_2_eng.png", use_container_width=True)
+    except:
+        pass # Silently pass if image is missing so the app doesn't crash
+
+with col_title:
+    st.title("Mark My Words")
+    st.markdown("### **İSTEK Schools Automated English Grader**")
+
+st.markdown("---")
 
 # --- SECURITY GATE ---
 def check_password():
@@ -62,10 +83,10 @@ def check_password():
                 st.error("😕 Incorrect passcode.")
         st.stop() # Stops the rest of the app from loading until authenticated
 
-# Run the security check FIRST
+# Run the security check
 check_password()
 
-# --- Everything below this line ONLY appears AFTER successful login ---
+# --- EVERYTHING BELOW THIS LINE ONLY APPEARS AFTER SUCCESSFUL LOGIN ---
 
 # --- GOOGLE SERVICES INTEGRATION ---
 def get_google_credentials():
@@ -101,21 +122,9 @@ def save_grade(student, assignment, score, word_count):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([timestamp, student, assignment, score, word_count])
     except Exception as e:
-        pass # Silently fail if sheet is unavailable so it doesn't interrupt the teacher
+        pass 
 
-# --- UI HEADER & LOGO ---
-col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
-with col_logo:
-    if os.path.exists("kurum_genel_logo_2_eng.png"):
-        st.image("kurum_genel_logo_2_eng.png", use_container_width=True)
-
-with col_title:
-    st.title("Mark My Words")
-    st.markdown("### **İSTEK Schools Automated English Grader**")
-
-st.markdown("---")
-
-# --- MAIN LAYOUT (Single Column) ---
+# --- MAIN GRADING LAYOUT ---
 st.subheader("1. Assignment Details & Rubric")
 
 assignment_type = st.selectbox(
