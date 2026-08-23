@@ -21,10 +21,20 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+# --- HELPER TO GET SECRETS (CASE-INSENSITIVE) ---
+def get_secret(key_name):
+    try:
+        for k in st.secrets:
+            if k.lower() == key_name.lower():
+                return st.secrets[k]
+    except Exception:
+        pass
+    return os.environ.get(key_name) or os.environ.get(key_name.upper()) or ""
+
 # --- SYSTEM CONFIGURATION ---
-DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
-SHEET_ID = st.secrets.get("SHEET_ID", "")
-ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr"])
+DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
+SHEET_ID = get_secret("SHEET_ID")
+ADMIN_EMAILS = get_secret("ADMIN_EMAILS") or ["serant.senyaylar@istek.k12.tr"]
 ALLOWED_DOMAIN = "@istek.k12.tr"
 
 MAX_FILES_PER_BATCH = 5
@@ -132,7 +142,8 @@ def check_authentication():
         st.stop()
 
     user_email, user_name = extract_user_identity()
-    is_admin = any(admin.lower() in [user_email.lower(), user_name.lower()] for admin in ADMIN_EMAILS)
+    admin_list = ADMIN_EMAILS if isinstance(ADMIN_EMAILS, list) else [ADMIN_EMAILS]
+    is_admin = any(str(admin).lower() in [user_email.lower(), user_name.lower()] for admin in admin_list)
 
     if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
@@ -176,9 +187,9 @@ def check_authentication():
         st.divider()
 
         with st.expander("🛠️ **System Diagnostics**", expanded=False):
-            gemini_ok = "gemini_api_key" in st.secrets or "GEMINI_API_KEY" in os.environ
-            groq_ok = "groq_api_key" in st.secrets or "GROQ_API_KEY" in os.environ
-            creds_ok = "google_credentials" in st.secrets
+            gemini_ok = bool(get_secret("gemini_api_key"))
+            groq_ok = bool(get_secret("groq_api_key"))
+            creds_ok = bool(get_secret("google_credentials"))
 
             st.write("• **Google Gemini API:**", "🟢 Connected" if gemini_ok else "🔴 Missing Secret")
             st.write("• **Groq Llama API:**", "🟢 Connected" if groq_ok else "🔴 Missing Secret")
@@ -195,9 +206,9 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
 # --- GOOGLE WORKSPACE INTEGRATION ---
 def get_google_credentials():
-    if "google_credentials" not in st.secrets: 
+    creds_secret = get_secret("google_credentials")
+    if not creds_secret: 
         return None
-    creds_secret = st.secrets["google_credentials"]
     creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
     scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
     return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
@@ -259,7 +270,7 @@ def detect_max_score(df):
                 pass
     return 100
 
-# --- FREE EVALUATION RUNNERS ---
+# --- EVALUATION RUNNERS WITH AUTO-FALLBACK ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
 Evaluate the student essay based STRICTLY on the provided rubric in <rubric_data> and the specific assignment prompt in <assignment_question>.
 
@@ -279,8 +290,12 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
-def run_gemini_structured(client, model_name, user_prompt, file_bytes, mime_type):
-    for attempt in range(2):
+def run_gemini_structured(client, preferred_model, user_prompt, file_bytes, mime_type):
+    models_to_try = [preferred_model, "gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = list(dict.fromkeys(models_to_try))
+    
+    last_err = ""
+    for model_name in models_to_try:
         try:
             if mime_type.startswith("text/"):
                 text_str = file_bytes.decode("utf-8", errors="ignore")
@@ -298,26 +313,35 @@ def run_gemini_structured(client, model_name, user_prompt, file_bytes, mime_type
             res_dict["model_used"] = model_name
             return res_dict
         except Exception as e:
-            if attempt == 1:
-                return {"is_valid_submission": False, "rejection_reason": f"{model_name} Error: {str(e)}", "total_score": 0, "word_count": 0}
-            time.sleep(1)
+            last_err = str(e)
+            time.sleep(0.5)
+
+    return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
 
 def run_groq_structured(client, user_prompt, extracted_text):
     if not extracted_text or not extracted_text.strip():
         return {"is_valid_submission": False, "rejection_reason": "Groq Error: Extracted text was empty.", "total_score": 0, "word_count": 0}
         
-    try:
-        res = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"{user_prompt}\n\nStudent Essay Text:\n{extracted_text}"}
-            ]
-        )
-        return json.loads(res.choices[0].message.content)
-    except Exception as e:
-        return {"is_valid_submission": False, "rejection_reason": f"Groq Error: {str(e)}", "total_score": 0, "word_count": 0}
+    groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"]
+    last_err = ""
+    for model_name in groq_models:
+        try:
+            res = client.chat.completions.create(
+                model=model_name,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"{user_prompt}\n\nStudent Essay Text:\n{extracted_text}"}
+                ]
+            )
+            res_dict = json.loads(res.choices[0].message.content)
+            res_dict["model_used"] = model_name
+            return res_dict
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    return {"is_valid_submission": False, "rejection_reason": f"Groq Error: {last_err}", "total_score": 0, "word_count": 0}
 
 # --- DASHBOARD METRICS ---
 st.markdown(f"### 👋 Welcome back, **{USER_NAME}**")
@@ -452,7 +476,7 @@ For example, when our English teacher assigned a group presentation last week, w
                 "File Name": file_obj.name,
                 "Size": f"{size_kb} KB",
                 "Format": mtype.split("/")[-1].upper(),
-                "Status": "Ready for Free AI Analysis"
+                "Status": "Ready for AI Analysis"
             })
         st.dataframe(pd.DataFrame(file_table_data), use_container_width=True)
 
@@ -471,11 +495,11 @@ For example, when our English teacher assigned a group presentation last week, w
                 st.error(f"❌ Session limit exceeded. Only {MAX_PAPERS_PER_SESSION - st.session_state.graded_count} remaining.")
                 st.stop()
 
-        gemini_key = st.secrets.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")
-        groq_key = st.secrets.get("groq_api_key") or os.environ.get("GROQ_API_KEY")
+        gemini_key = get_secret("gemini_api_key")
+        groq_key = get_secret("groq_api_key")
 
-        gemini_client = genai.Client(api_key=gemini_key)
-        groq_client = Groq(api_key=groq_key)
+        gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
+        groq_client = Groq(api_key=groq_key) if groq_key else None
 
         active_q = st.session_state.active_question
         raw_r = st.session_state.raw_rubric
@@ -507,24 +531,22 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
             upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
 
             with st.spinner(f"🚀 Processing {file.name} across Active Models..."):
-                # 1. Primary Run: Gemini 2.5 Flash
-                res_g25 = run_gemini_structured(gemini_client, "gemini-2.5-flash", user_prompt, file_bytes, mime_type)
+                res_gemini_primary = run_gemini_structured(gemini_client, "gemini-2.0-flash", user_prompt, file_bytes, mime_type) if gemini_client else {"is_valid_submission": False, "rejection_reason": "Gemini API key missing"}
                 
                 if not extracted_text:
-                    extracted_text = res_g25.get("transcribed_text", "")
+                    extracted_text = res_gemini_primary.get("transcribed_text", "")
 
-                # 2. Parallel Secondary Runs: Gemini 3.5 Flash & Groq Llama 3.3
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                    f_g35 = executor.submit(run_gemini_structured, gemini_client, "gemini-3.5-flash", user_prompt, file_bytes, mime_type)
-                    f_groq = executor.submit(run_groq_structured, groq_client, user_prompt, extracted_text)
+                    f_gemini_sec = executor.submit(run_gemini_structured, gemini_client, "gemini-1.5-flash", user_prompt, file_bytes, mime_type) if gemini_client else None
+                    f_groq = executor.submit(run_groq_structured, groq_client, user_prompt, extracted_text) if groq_client else None
 
-                    res_g35 = f_g35.result()
-                    res_groq = f_groq.result()
+                    res_gemini_sec = f_gemini_sec.result() if f_gemini_sec else {"is_valid_submission": False, "rejection_reason": "Gemini API key missing"}
+                    res_groq = f_groq.result() if f_groq else {"is_valid_submission": False, "rejection_reason": "Groq API key missing"}
 
                 all_responses = {
-                    "Gemini 2.5 Flash": res_g25, 
-                    "Gemini 3.5 Flash": res_g35, 
-                    "Groq Llama 3.3 70B": res_groq
+                    "Gemini 2.0 Flash": res_gemini_primary, 
+                    "Gemini 1.5 Flash": res_gemini_sec, 
+                    "Groq Llama Engine": res_groq
                 }
                 
                 valid_results = {name: r for name, r in all_responses.items() if check_validity(r)}
@@ -545,8 +567,8 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                 transcribed_text = primary_res.get("transcribed_text", extracted_text)
                 feedback = primary_res.get("feedback", "N/A")
 
-                score_g25 = res_g25.get("total_score", "Skipped") if check_validity(res_g25) else "Skipped"
-                score_g35 = res_g35.get("total_score", "Skipped") if check_validity(res_g35) else "Skipped"
+                score_g20 = res_gemini_primary.get("total_score", "Skipped") if check_validity(res_gemini_primary) else "Skipped"
+                score_g15 = res_gemini_sec.get("total_score", "Skipped") if check_validity(res_gemini_sec) else "Skipped"
                 score_groq = res_groq.get("total_score", "Skipped") if check_validity(res_groq) else "Skipped"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, scale_val)
@@ -557,7 +579,7 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
 Final Consensus Score: {final_score} / {scale_val}
-Model Scores Summary: Gemini 2.5 Flash: {score_g25} | Gemini 3.5 Flash: {score_g35} | Groq Llama 3.3: {score_groq}
+Model Scores Summary: Gemini 2.0 Flash: {score_g20} | Gemini 1.5 Flash: {score_g15} | Groq Llama Engine: {score_groq}
 ================================================================================
 Target Question / Prompt:
 {active_q}
@@ -581,9 +603,9 @@ Feedback:
                     "final_score": final_score,
                     "total_scale": scale_val,
                     "word_count": word_count,
-                    "scores": [score_g25, score_g35, score_groq],
-                    "res_g25": res_g25,
-                    "res_g35": res_g35,
+                    "scores": [score_g20, score_g15, score_groq],
+                    "res_g20": res_gemini_primary,
+                    "res_g15": res_gemini_sec,
                     "res_groq": res_groq,
                     "report_bytes": report_bytes,
                     "report_fn": report_fn,
@@ -635,14 +657,14 @@ with wizard_tab3:
                     st.markdown("#### 🎯 Evaluation Breakdown")
                     st.markdown(f"**Target Question:** *\"{item.get('question', 'N/A')}\"*")
                     st.markdown(f"**Final Score:** `{item['final_score']} / {scale_val}` | **Word Count:** `{item['word_count']}`")
-                    st.markdown(f"**Gemini 2.5 Flash:** {item['scores'][0]} | **Gemini 3.5 Flash:** {item['scores'][1]} | **Groq Llama 3.3:** {item['scores'][2]}")
+                    st.markdown(f"**Gemini 2.0 Flash:** {item['scores'][0]} | **Gemini 1.5 Flash:** {item['scores'][1]} | **Groq Llama:** {item['scores'][2]}")
 
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini 2.5 Flash", "⚡ Gemini 3.5 Flash", "🦙 Groq Llama 3.3"])
-                    with t1: st.json(item['res_g25'])
-                    with t2: st.json(item['res_g35'])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini 2.0 Flash", "⚡ Gemini 1.5 Flash", "🦙 Groq Llama Engine"])
+                    with t1: st.json(item['res_g20'])
+                    with t2: st.json(item['res_g15'])
                     with t3: st.json(item['res_groq'])
 
 # --- FOOTER ---
