@@ -70,6 +70,25 @@ div[data-testid="stButton"] > button {
     font-weight: 600 !important;
     font-size: 0.95rem !important;
 }
+
+/* Sidebar User Profile Card Styling */
+.user-card {
+    background-color: var(--secondary-background-color);
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    margin-bottom: 10px;
+}
+.user-card-name {
+    font-weight: 700;
+    font-size: 1.05rem;
+    margin-bottom: 2px;
+}
+.user-card-email {
+    font-size: 0.82rem;
+    opacity: 0.8;
+    word-break: break-all;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -104,7 +123,6 @@ with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
     
-    # Real-time clock adapting dynamically to user browser timezone
     st.components.v1.html("""
     <div id="clock" style="font-family: 'Inter', system-ui, sans-serif; font-size: 0.9rem; font-weight: 600; color: #707070;">
       🌐 Detecting your local timezone...
@@ -139,7 +157,6 @@ def check_authentication():
 
     user_email, user_name = extract_user_identity()
 
-    # Full admin validation for both email address and GitHub handle
     is_admin = any(
         admin.lower() in [user_email.lower(), user_name.lower()] 
         for admin in ADMIN_EMAILS
@@ -152,19 +169,38 @@ def check_authentication():
         st.stop()
 
     with st.sidebar:
-        st.markdown("### 👤 **User Profile**")
-        st.markdown(f"**Name:** {user_name}\n**Email / Username:** `{user_email or user_name}`")
-        st.divider()
+        # Optimized User Profile Card
+        st.markdown("### 👤 **Account Details**")
+        st.markdown(f"""
+        <div class="user-card">
+            <div class="user-card-name">👤 {user_name}</div>
+            <div class="user-card-email">📧 {user_email or 'GitHub Verified'}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
         if is_admin:
             st.success("👑 **Admin Status: Active**")
-            st.info("⚡ Quotas & batch limits disabled.")
-            if st.button("Reset Session Quota Counter"):
+            st.caption("⚡ Quotas & batch limits disabled.")
+            if st.button("Reset Quota Counter", use_container_width=True):
                 st.session_state.graded_count = 0
                 st.rerun()
         else:
             st.success("✅ **Teacher Status: Active**")
-            st.caption(f"Session Usage: {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION}")
+            st.caption(f"Session Usage: {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
+
+        st.divider()
+
+        # Google Workspace Shortcuts
+        st.markdown("### 🌐 **Google Workspace**")
+        gcol1, gcol2 = st.columns(2)
+        with gcol1:
+            st.link_button("🏫 Classroom", "https://classroom.google.com", use_container_width=True)
+            st.link_button("📁 Drive", "https://drive.google.com", use_container_width=True)
+            st.link_button("📄 Docs", "https://docs.google.com", use_container_width=True)
+        with gcol2:
+            st.link_button("📧 Gmail", "https://mail.google.com", use_container_width=True)
+            st.link_button("📊 Sheets", "https://sheets.google.com", use_container_width=True)
+            st.link_button("📅 Calendar", "https://calendar.google.com", use_container_width=True)
 
         st.divider()
         if st.button("Log out", use_container_width=True):
@@ -178,7 +214,6 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 def get_google_credentials():
     creds_secret = st.secrets["google_credentials"]
     creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
-    # Scope restricted to drive.file for security compliance
     scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
     return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
 
@@ -350,7 +385,6 @@ Check if submission contains legible handwritten/typed English work. If invalid,
         file_bytes = file.getvalue()
         mime_type = "application/pdf" if file.name.endswith(".pdf") else "image/jpeg"
         
-        # Save raw uploaded paper to Google Drive
         upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
         
         with st.spinner(f"🚀 Running Parallel Tri-Model Consensus on {file.name}..."):
@@ -375,7 +409,6 @@ Check if submission contains legible handwritten/typed English work. If invalid,
 
             save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count)
 
-            # Compile text report file
             report_text = f"""================================================================================
 İSTEK SCHOOLS AUTOMATED ENGLISH GRADING REPORT
 ================================================================================
