@@ -25,7 +25,7 @@ from googleapiclient.http import MediaIoBaseUpload
 # --- SYSTEM CONFIGURATION ---
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "")
 SHEET_ID = st.secrets.get("SHEET_ID", "")
-# Added specific email for Admin access
+# Specific email hardcoded for Admin access
 ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr"])
 ALLOWED_DOMAIN = "@istek.k12.tr"
 
@@ -165,7 +165,7 @@ def check_authentication():
 
         st.divider()
 
-        # --- NEW: GOOGLE WORKSPACE LINKS ---
+        # --- GOOGLE WORKSPACE LINKS ---
         st.markdown("### 📁 **Workspace Links**")
         if DRIVE_FOLDER_ID:
             st.markdown(f"☁️ [Open Google Drive Folder](https://drive.google.com/drive/folders/{DRIVE_FOLDER_ID})")
@@ -196,6 +196,45 @@ def check_authentication():
             st.logout()
 
     return is_admin, user_email, user_name
+
+IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
+
+# --- GOOGLE WORKSPACE INTEGRATION ---
+def get_google_credentials():
+    if "google_credentials" not in st.secrets: return None
+    creds_secret = st.secrets["google_credentials"]
+    creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+    scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+    return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
+
+def upload_file_to_drive(file_bytes, file_name, folder_id, mime_type):
+    try:
+        creds = get_google_credentials()
+        if not creds or not folder_id: return False
+        service = build('drive', 'v3', credentials=creds)
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media = MediaIoBaseUpload(BytesIO(file_bytes), mimetype=mime_type, resumable=True)
+        service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return True
+    except Exception: return False
+
+def get_google_sheet():
+    creds = get_google_credentials()
+    if not creds or not SHEET_ID: return None
+    client = gspread.authorize(creds)
+    return client.open_by_key(SHEET_ID).sheet1
+
+def save_grade(teacher_name, teacher_email, student, assignment, score, word_count, total_scale):
+    try:
+        sheet = get_google_sheet()
+        if not sheet: return
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        sheet.append_row([
+            now_utc.strftime("%Y-%m-%d"), 
+            now_utc.strftime("%H:%M:%S UTC"), 
+            teacher_name, teacher_email, student, assignment, f"{score}/{total_scale}", word_count
+        ])
+    except Exception: pass 
 
 # --- PARSING & SCORE DETECTOR ---
 def parse_json_response(raw_text):
@@ -229,7 +268,6 @@ def detect_max_score(df):
     return 100
 
 # --- STRUCTURED EVALUATION RUNNERS ---
-# Updated System Prompt to explicitly warn against prompt injection
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
 Evaluate the student essay based STRICTLY on the provided rubric in <rubric_data> and the specific assignment prompt in <assignment_question>.
 
@@ -280,7 +318,6 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
     return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
 
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
-    # Added retry loop for GPT to handle rate limits and transient errors
     for attempt in range(4):
         try:
             if mime_type.startswith("text/"):
@@ -310,7 +347,6 @@ def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
             time.sleep(2 ** (attempt + 1))
 
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
-    # Added retry loop for Claude to handle rate limits and transient errors
     for attempt in range(4):
         try:
             if mime_type.startswith("text/"):
@@ -431,10 +467,6 @@ with wizard_tab1:
                 * Select **Custom Assignment** under **Assignment Type** (or choose your preferred template).
                 * Under **Rubric Source**, click the radio button for **Upload Custom CSV Rubric**.
                 * Click **Browse files** or drag and drop your saved `.csv` file directly into the upload area below.
-
-                **3. Verify System Detection**
-                * Check the preview table on screen to verify that your criteria and descriptions render clearly.
-                * Review the **Total Evaluation Scale** input box. The system automatically sums your `Max Score` column (e.g., 35 + 35 + 30 = 100) and saves this rubric configuration to your session state.
                 """)
             
             custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric File", type=["csv"])
@@ -675,6 +707,7 @@ with wizard_tab3:
                     with t1: st.json(item['res_g'])
                     with t2: st.json(item['res_o'])
                     with t3: st.json(item['res_c'])
+
 # --- FOOTER & COPYRIGHT ---
 st.markdown("""
     <hr>
