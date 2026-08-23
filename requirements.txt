@@ -2,6 +2,7 @@ streamlit
 pandas
 google-genai
 openai
+anthropic
 gspread
 google-auth
 google-api-python-client
