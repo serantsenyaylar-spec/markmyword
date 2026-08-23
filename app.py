@@ -319,69 +319,46 @@ def run_gemini_structured(client, preferred_model, user_prompt, file_bytes, mime
 
     return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {last_err}", "total_score": 0, "word_count": 0}
 
-def evaluate_groq(prompt: str, user_submission: str, criteria: list) -> dict:
-    """Evaluates submission using Groq API with active fallback models."""
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return {"error": "GROQ_API_KEY missing from environment"}
-
-    # Active production Groq models (removed decommissioned preview models)
+def run_groq_structured(client, user_prompt, extracted_text):
+    if not extracted_text or not extracted_text.strip():
+        return {
+            "is_valid_submission": False, 
+            "rejection_reason": "Groq Error: Extracted text was empty.", 
+            "total_score": 0, 
+            "word_count": 0
+        }
+        
     groq_models = [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it"
+        "mixtral-8x7b-32768"
     ]
     
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    formatted_criteria = "\n".join([f"- {c['name']}: {c['weight'] * 100}% weight" for c in criteria])
-    eval_prompt = f"""
-Evaluate the following submission against these criteria:
-{formatted_criteria}
-
-Submission:
-{user_submission}
-
-Respond strictly in valid JSON format with keys:
-"is_valid_submission": boolean,
-"rejection_reason": string or null,
-"total_score": float (0-100),
-"word_count": integer
-"""
-
-    last_error = None
-    for model in groq_models:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "You are a precise grading assistant. Output raw JSON only."},
-                {"role": "user", "content": eval_prompt}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.2
-        }
-        
+    last_err = ""
+    for model_name in groq_models:
         try:
-            resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
-            if resp.status_code == 200:
-                content = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(content)
-            else:
-                last_error = f"Groq HTTP {resp.status_code}: {resp.text}"
+            res = client.chat.completions.create(
+                model=model_name,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"{user_prompt}\n\nStudent Essay Text:\n{extracted_text}"}
+                ]
+            )
+            res_dict = json.loads(res.choices[0].message.content)
+            res_dict["model_used"] = model_name
+            return res_dict
         except Exception as e:
-            last_error = str(e)
+            last_err = str(e)
+            continue
 
     return {
-        "is_valid_submission": False,
-        "rejection_reason": f"Groq evaluation failed across all models: {last_error}",
-        "total_score": 0,
-        "word_count": len(user_submission.split())
+        "is_valid_submission": False, 
+        "rejection_reason": f"Groq Error: {last_err}", 
+        "total_score": 0, 
+        "word_count": len(extracted_text.split())
     }
-
+    
 # --- DASHBOARD METRICS ---
 st.markdown(f"### 👋 Welcome back, **{USER_NAME}**")
 hm1, hm2, hm3 = st.columns(3)
