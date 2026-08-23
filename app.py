@@ -97,7 +97,48 @@ def extract_user_identity():
         user_name = st.session_state.auth_user.get("name", "")
 
     return user_email, user_name or "Teacher User"
+# --- CONFIGURATION ---
+DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
+SHEET_ID = get_secret("SHEET_ID")
 
+# Safely parse ADMIN_EMAILS into a clean list whether passed as string or list
+raw_admins = get_secret("ADMIN_EMAILS")
+if isinstance(raw_admins, str):
+    ADMIN_EMAILS = [e.strip() for e in raw_admins.split(",") if e.strip()]
+elif isinstance(raw_admins, list):
+    ADMIN_EMAILS = raw_admins
+else:
+    ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
+
+# Domain matching (Cleaned without leading '@' for flexible string checking)
+ALLOWED_DOMAIN = "istek.k12.tr"
+
+# Rate & session constraints
+MAX_FILES_PER_BATCH = 5
+MAX_PAPERS_PER_SESSION = 15
+
+# --- USER LOGIN LOGGING (Lines 70–85) ---
+creds = get_google_credentials()
+client = None
+
+if creds:
+    try:
+        client = gspread.authorize(creds)
+        sheet_id = get_secret("SHEET_ID")
+        
+        # Open by ID if available, fallback to title search
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).worksheet("Logins")
+        else:
+            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+            
+        # Record session login timestamp
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([now_str, USER_NAME, USER_EMAIL])
+    except Exception as e:
+        # Fallback gracefully if database or sheet name fails to connect
+        st.sidebar.warning(f"⚠️ Could not log login session: {str(e)}")
+        
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
 
@@ -165,48 +206,6 @@ def get_google_credentials():
     except Exception as e:
         st.error(f"Error initializing Google credentials: {e}")
         return None
-        
-# --- CONFIGURATION ---
-DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
-SHEET_ID = get_secret("SHEET_ID")
-
-# Safely parse ADMIN_EMAILS into a clean list whether passed as string or list
-raw_admins = get_secret("ADMIN_EMAILS")
-if isinstance(raw_admins, str):
-    ADMIN_EMAILS = [e.strip() for e in raw_admins.split(",") if e.strip()]
-elif isinstance(raw_admins, list):
-    ADMIN_EMAILS = raw_admins
-else:
-    ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
-
-# Domain matching (Cleaned without leading '@' for flexible string checking)
-ALLOWED_DOMAIN = "istek.k12.tr"
-
-# Rate & session constraints
-MAX_FILES_PER_BATCH = 5
-MAX_PAPERS_PER_SESSION = 15
-
-# --- USER LOGIN LOGGING (Lines 70–85) ---
-creds = get_google_credentials()
-client = None
-
-if creds:
-    try:
-        client = gspread.authorize(creds)
-        sheet_id = get_secret("SHEET_ID")
-        
-        # Open by ID if available, fallback to title search
-        if sheet_id:
-            sheet = client.open_by_key(sheet_id).worksheet("Logins")
-        else:
-            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
-            
-        # Record session login timestamp
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([now_str, USER_NAME, USER_EMAIL])
-    except Exception as e:
-        # Fallback gracefully if database or sheet name fails to connect
-        st.sidebar.warning(f"⚠️ Could not log login session: {str(e)}")
 
 # --- PAGE SETUP (Must be the first Streamlit command) ---
 st.set_page_config(
