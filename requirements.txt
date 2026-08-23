@@ -1,8 +1,7 @@
 streamlit
-google-genai
-google-cloud-vision
-openai
 pandas
-google-api-python-client
-google-auth
+google-genai
+openai
 gspread
+google-auth
+google-api-python-client
