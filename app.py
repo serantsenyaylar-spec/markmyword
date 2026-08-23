@@ -38,20 +38,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CONTAINER-SAFE TYPOGRAPHY ---
+# --- LIGHT & DARK MODE COMPATIBLE STYLING ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
+/* Apply font across root app */
 html, body, .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
 }
 
+/* Dynamic color variables support both Light and Dark Streamlit themes natively */
 .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
 .stApp input, .stApp textarea, .stApp button, .stApp select {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    color: var(--text-color) !important;
 }
 
+/* Text Container Boundary Controls */
 div[data-testid="stMarkdownContainer"], 
 div[data-testid="stMarkdownContainer"] p,
 div[data-testid="stText"], 
@@ -61,17 +65,27 @@ div[data-testid="stText"],
     white-space: normal !important;
 }
 
+/* Header Polish */
 .stApp h1, .stApp h2, .stApp h3 {
     font-weight: 700 !important;
     letter-spacing: -0.02em !important;
 }
 
+/* Theme-adaptive expander cards */
+div[data-testid="stExpander"] {
+    border: 1px solid var(--secondary-background-color) !important;
+    border-radius: 10px !important;
+    background-color: var(--background-color) !important;
+}
+
+/* Button UI styling */
 div[data-testid="stButton"] > button {
     border-radius: 8px !important;
     font-weight: 600 !important;
     font-size: 0.95rem !important;
 }
 
+/* Material Icons protection */
 [data-testid="stIcon"], i, [class*="Material"] {
     font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
 }
@@ -82,7 +96,30 @@ div[data-testid="stButton"] > button {
 if "graded_count" not in st.session_state:
     st.session_state.graded_count = 0
 
-# --- UI HEADER & LOGO ---
+# --- USER IDENTITY EXTRACTION ---
+def extract_user_identity():
+    user_email = ""
+    user_name = ""
+    
+    try:
+        user_email = getattr(st.user, "email", "") or st.user.get("email", "")
+        user_name = getattr(st.user, "name", "") or st.user.get("name", "")
+    except Exception:
+        pass
+
+    # Extract clean Name and Surname from email prefix if name claim is empty
+    if user_email and not user_name:
+        name_part = user_email.split("@")[0]
+        tokens = name_part.split(".")
+        user_name = " ".join([t.capitalize() for t in tokens])
+
+    return user_email, user_name or "Teacher User"
+
+# --- UI HEADER & LIVE TIMESTAMP ---
+now_ts = datetime.datetime.now()
+formatted_date = now_ts.strftime("%B %d, %Y")
+formatted_time = now_ts.strftime("%H:%M:%S")
+
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 with col_logo:
     try:
@@ -93,6 +130,7 @@ with col_logo:
 with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
+    st.caption(f"📅 **Date:** {formatted_date} | 🕒 **Time:** {formatted_time}")
 
 st.markdown("---")
 
@@ -111,11 +149,7 @@ def check_authentication():
             st.login("google")
         st.stop()
 
-    user_email = ""
-    try:
-        user_email = getattr(st.user, "email", "") or st.user.get("email", "")
-    except Exception:
-        user_email = ""
+    user_email, user_name = extract_user_identity()
 
     if not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
@@ -127,24 +161,29 @@ def check_authentication():
     is_admin = user_email in ADMIN_EMAILS
 
     with st.sidebar:
+        st.markdown(f"### 👤 **User Profile**")
+        st.markdown(f"**Name:** {user_name}")
+        st.markdown(f"**Email:** `{user_email}`")
+        st.caption(f"🕒 **Logged in at:** {formatted_time}")
+        st.divider()
+
         if is_admin:
-            st.success("👑 **Admin Access Granted**")
-            st.markdown(f"**Logged in as Superuser:**\n`{user_email}`")
-            st.info("⚡ Quota & File limits are **DISABLED** for your account.")
+            st.success("👑 **Admin Status: Active**")
+            st.info("⚡ Batch limits & quota limits are **DISABLED**.")
             if st.button("Reset Session Quota Counter"):
                 st.session_state.graded_count = 0
                 st.rerun()
         else:
-            st.success("✅ Authenticated")
-            st.markdown(f"**Logged in as Teacher:**\n{user_email}")
+            st.success("✅ **Teacher Status: Active**")
             st.caption(f"Session Usage: {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
 
-        if st.button("Log out"):
+        st.divider()
+        if st.button("Log out", use_container_width=True):
             st.logout()
 
-    return is_admin, user_email
+    return is_admin, user_email, user_name
 
-IS_ADMIN, USER_EMAIL = check_authentication()
+IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
 # --- HELPER FUNCTIONS ---
 def get_google_credentials():
@@ -173,11 +212,12 @@ def get_google_sheet():
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID).sheet1
 
-def save_grade(student, assignment, score, word_count):
+def save_grade(teacher_name, teacher_email, student, assignment, score, word_count):
     try:
         sheet = get_google_sheet()
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([timestamp, student, assignment, score, word_count])
+        date_stamp = datetime.datetime.now().strftime("%Y-%m-%d")
+        time_stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        sheet.append_row([date_stamp, time_stamp, teacher_name, teacher_email, student, assignment, score, word_count])
     except Exception:
         pass 
 
@@ -313,7 +353,6 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
         st.error("Please select at least one file to grade.")
         st.stop()
         
-    # Enforce Limits only for non-admin teachers
     if not IS_ADMIN:
         if len(uploaded_files) > MAX_FILES_PER_BATCH:
             st.error(f"⚠️ **Batch Limit Exceeded:** Teachers can upload a maximum of {MAX_FILES_PER_BATCH} papers per batch.")
@@ -323,7 +362,6 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
             st.error(f"🛑 **Session Limit Reached:** Quota of {MAX_PAPERS_PER_SESSION} evaluations reached for this session.")
             st.stop()
 
-    # Load Rubric
     if rubric_source == "Upload Custom Rubric" and custom_rubric_file is not None:
         rubric_text = pd.read_csv(custom_rubric_file).to_string()
     else:
@@ -400,9 +438,11 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
             score_diff = max(scores) - min(scores)
             final_score = round(sum(scores) / 3, 1)
 
-            save_grade(student_identifier, assignment_type, final_score, word_count)
+            save_grade(USER_NAME, USER_EMAIL, student_identifier, assignment_type, final_score, word_count)
 
             with st.expander(f"✅ Graded: {student_identifier} | Final Score: {final_score}", expanded=True):
+                st.caption(f"Evaluated by: {USER_NAME} ({USER_EMAIL}) on {datetime.datetime.now().strftime('%Y-%m-%d at %H:%M:%S')}")
+                
                 if score_diff >= 10:
                     st.warning(f"⚠️ **High Discrepancy Alert:** Models differed by {score_diff} pts. Manual review advised.")
                 else:
