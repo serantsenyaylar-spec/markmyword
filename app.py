@@ -353,7 +353,7 @@ def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"Claude Error: {str(e)}", "total_score": 0, "word_count": 0}
 
-# --- FEATURE 3: TEACHER HERO DASHBOARD & SESSION PROGRESS TRACKER ---
+# --- TEACHER HERO DASHBOARD & SESSION PROGRESS TRACKER ---
 st.markdown(f"### 👋 Welcome back, **{USER_NAME}**")
 hm1, hm2, hm3 = st.columns(3)
 hm1.metric("Papers Graded (Session)", f"{st.session_state.graded_count} / {MAX_PAPERS_PER_SESSION}")
@@ -366,7 +366,7 @@ if not IS_ADMIN:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- FEATURE 1: 3-STEP GUIDED WIZARD TABS ---
+# --- 3-STEP GUIDED WIZARD TABS ---
 wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
     "⚙️ Step 1: Prompt & Rubric Setup", 
     "📤 Step 2: Upload & File Pre-Flight", 
@@ -437,9 +437,43 @@ with wizard_tab1:
         rubric_source = st.radio("Rubric Source", ["Use Pre-installed Default", "Upload Custom Rubric"], horizontal=True)
 
         if rubric_source == "Upload Custom Rubric":
+            # --- INSTRUCTION GUIDE FOR TEACHERS ---
+            with st.expander("📖 How to prepare your Custom Rubric CSV", expanded=True):
+                st.markdown("""
+                **Follow these 4 steps to upload a custom rubric:**
+
+                1. **Open Google Sheets or Excel** and create a table with these exact 3 headers in Row 1:
+                   * `Criteria` — Category name (e.g., *Vocabulary*, *Task Achievement*).
+                   * `Max Score` — Points for that criteria (sum across all rows must equal 100).
+                   * `Description` — Specific scoring rules for the AI.
+                2. **Format Example:**
+                """)
+                
+                # Interactive sample preview table
+                sample_df = pd.DataFrame({
+                    "Criteria": ["Task Achievement", "Organization", "Language & Syntax"],
+                    "Max Score": [40, 30, 30],
+                    "Description": [
+                        "Answers all parts of the prompt fully.",
+                        "Clear introduction, body, and conclusion paragraphs.",
+                        "Correct grammar, punctuation, and CEFR B1 vocabulary."
+                    ]
+                })
+                st.dataframe(sample_df, hide_index=True, use_container_width=True)
+
+                st.markdown("""
+                3. **Save/Export File:** Click **File $\rightarrow$ Download $\rightarrow$ Comma-separated values (.csv)**.
+                4. **Upload:** Drag and drop your `.csv` file into the box below.
+                """)
+
             custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric", type=["csv"])
             if custom_rubric_file:
-                active_rubric_df = pd.read_csv(custom_rubric_file)
+                try:
+                    active_rubric_df = pd.read_csv(custom_rubric_file)
+                    st.success("✅ Custom rubric loaded successfully!")
+                except Exception as e:
+                    st.error(f"Error loading CSV: {str(e)}")
+                    active_rubric_df = default_rubric_df
             else:
                 active_rubric_df = default_rubric_df
         else:
@@ -457,7 +491,6 @@ with wizard_tab1:
 with wizard_tab2:
     st.markdown("#### 📤 Upload Student Submissions")
     
-    # --- FEATURE 5: TRY SAMPLE PAPER DEMO BUTTON ---
     col_up1, col_up2 = st.columns([3, 1])
     with col_up1:
         uploaded_files = st.file_uploader("Upload Student Work (PDF, JPG, PNG)", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
@@ -465,7 +498,6 @@ with wizard_tab2:
         st.markdown("**Test Drive App**")
         run_demo = st.button("🧪 Load Sample Paper", help="Injects a sample B1 student essay to test the tri-model workflow immediately.")
 
-    # Handle sample paper creation
     if run_demo:
         sample_filename = "Sample_Student_9999.txt"
         sample_content = """Technology has completely changed how students communicate today. In the past, students called each other on landline phones or talked in person after class. Now, apps like WhatsApp and Google Classroom allow us to exchange study notes and work on group projects instantly.
@@ -479,7 +511,6 @@ For example, when our English teacher assigned a group presentation last week, w
         })()]
         st.info("🧪 **Sample Student Essay Loaded!** Click **Evaluate Submissions** below.")
 
-    # --- FEATURE 4: PRE-FLIGHT FILE INSPECTION TABLE ---
     if uploaded_files:
         st.markdown("##### 📋 Pre-Flight Submission Inspection")
         file_table_data = []
@@ -622,7 +653,6 @@ with wizard_tab3:
     else:
         graded_results = st.session_state.graded_results
 
-        # ADMIN ONLY: Analytics Dashboard
         if IS_ADMIN:
             st.markdown("### 📊 Admin Analytics & Class Performance")
             all_scores = [item["final_score"] for item in graded_results]
@@ -641,7 +671,6 @@ with wizard_tab3:
             st.bar_chart(chart_data)
             st.divider()
 
-        # TEACHERS & ADMIN: ZIP Batch Download
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for item in graded_results:
@@ -658,7 +687,6 @@ with wizard_tab3:
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Canvas Preview & Side-by-Side View
         for item in graded_results:
             with st.expander(f"✅ Graded: {item['student_id']} | Final Score: {item['final_score']}", expanded=True):
                 col_canvas, col_details = st.columns([1, 1])
