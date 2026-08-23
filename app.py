@@ -17,10 +17,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- SECURE CONFIGURATION (FETCHED FROM ST.SECRETS) ---
+# --- SECURE CONFIGURATION (FETCHED FROM ST.SECRETS WITH FALLBACKS) ---
 DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k")
 SHEET_ID = st.secrets.get("SHEET_ID", "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE")
-ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr"])
+ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr", "serantsenyaylar-spec"])
 ALLOWED_DOMAIN = "@istek.k12.tr"
 
 # Standard Teacher Restrictions
@@ -35,7 +35,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- LIGHT & DARK MODE STYLING ---
+# --- LIGHT & DARK MODE COMPATIBLE STYLING ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -92,7 +92,7 @@ def extract_user_identity():
 
     return user_email, user_name or "Teacher User"
 
-# --- UI HEADER & DYNAMIC CLOCK ---
+# --- UI HEADER & DYNAMIC USER-ADAPTIVE CLOCK ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 with col_logo:
     try:
@@ -104,9 +104,10 @@ with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
     
+    # Real-time clock adapting dynamically to user browser timezone
     st.components.v1.html("""
     <div id="clock" style="font-family: 'Inter', system-ui, sans-serif; font-size: 0.9rem; font-weight: 600; color: #707070;">
-      🌐 Detecting local timezone...
+      🌐 Detecting your local timezone...
     </div>
     <script>
     function updateAdaptiveClock() {
@@ -138,17 +139,21 @@ def check_authentication():
 
     user_email, user_name = extract_user_identity()
 
-    if not user_email.endswith(ALLOWED_DOMAIN):
+    # Full admin validation for both email address and GitHub handle
+    is_admin = any(
+        admin.lower() in [user_email.lower(), user_name.lower()] 
+        for admin in ADMIN_EMAILS
+    )
+
+    if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
         if st.button("Sign out and try another account", type="primary", use_container_width=True):
             st.logout()
         st.stop()
 
-    is_admin = user_email in ADMIN_EMAILS
-
     with st.sidebar:
-        st.markdown(f"### 👤 **User Profile**")
-        st.markdown(f"**Name:** {user_name}\n**Email:** `{user_email}`")
+        st.markdown("### 👤 **User Profile**")
+        st.markdown(f"**Name:** {user_name}\n**Email / Username:** `{user_email or user_name}`")
         st.divider()
 
         if is_admin:
@@ -169,10 +174,11 @@ def check_authentication():
 
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
-# --- HELPER & API FUNCTIONS ---
+# --- HELPER & GOOGLE API FUNCTIONS ---
 def get_google_credentials():
     creds_secret = st.secrets["google_credentials"]
     creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+    # Scope restricted to drive.file for security compliance
     scopes = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
     return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
 
@@ -344,6 +350,7 @@ Check if submission contains legible handwritten/typed English work. If invalid,
         file_bytes = file.getvalue()
         mime_type = "application/pdf" if file.name.endswith(".pdf") else "image/jpeg"
         
+        # Save raw uploaded paper to Google Drive
         upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
         
         with st.spinner(f"🚀 Running Parallel Tri-Model Consensus on {file.name}..."):
@@ -368,6 +375,7 @@ Check if submission contains legible handwritten/typed English work. If invalid,
 
             save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count)
 
+            # Compile text report file
             report_text = f"""================================================================================
 İSTEK SCHOOLS AUTOMATED ENGLISH GRADING REPORT
 ================================================================================
