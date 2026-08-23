@@ -22,18 +22,60 @@ DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
 SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
 
 # --- PAGE SETTINGS & BRANDING ---
-st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="Mark My Words", 
+    page_icon="📝", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
 
+# --- THEME-AWARE STYLING & TYPOGRAPHY ---
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
-p, h1, h2, h3, h4, h5, h6 { font-family: 'Roboto', sans-serif !important; }
-[data-testid="stAppViewContainer"] { background-color: #FFFFFF !important; }
-[data-testid="stSidebar"] { background-color: #F8F9FA !important; }
-h1, h2, h3, h4, h5, h6 { color: #0055A5 !important; }
-button[kind="primary"] { background-color: #0055A5 !important; color: white !important; border-radius: 8px !important; border: none !important; font-weight: 700 !important; }
-button[kind="primary"]:hover { background-color: #98D2C9 !important; color: #0055A5 !important; }
-.gradebook-header { color: #0055A5; border-bottom: 2px solid #98D2C9; padding-bottom: 10px; }
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+/* Font Family & Base Size */
+html, body, [class*="css"], p, div, label, span {
+    font-family: 'Roboto', sans-serif !important;
+    font-size: 0.95rem;
+}
+
+/* Controlled Typography Hierarchy */
+h1 {
+    font-size: 1.75rem !important;
+    font-weight: 700 !important;
+    margin-bottom: 0.2rem !important;
+}
+
+h2 {
+    font-size: 1.35rem !important;
+    font-weight: 600 !important;
+    margin-top: 0.8rem !important;
+    margin-bottom: 0.4rem !important;
+}
+
+h3 {
+    font-size: 1.1rem !important;
+    font-weight: 600 !important;
+    margin-top: 0.6rem !important;
+    margin-bottom: 0.3rem !important;
+}
+
+/* Theme-adaptive Header Styling */
+.gradebook-header {
+    font-size: 1.25rem !important;
+    font-weight: 700 !important;
+    border-bottom: 2px solid #98D2C9;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+
+/* Primary Accent Buttons */
+button[kind="primary"] {
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.95rem !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -105,7 +147,7 @@ def load_grades():
 st.sidebar.header("⚙️ System Status")
 st.sidebar.success("✅ Tri-Consensus Engine Active\n(Gemini + GPT-4o + Claude)")
 st.sidebar.markdown("---")
-st.sidebar.info("Upload rubrics directly on the main page.")
+st.sidebar.info("Upload custom rubrics directly on the main page.")
 
 # --- UI HEADER ---
 col_logo, col_title = st.columns([1, 4])
@@ -124,10 +166,16 @@ col1, col2 = st.columns([1, 1.2], gap="large")
 with col1:
     st.subheader("1. Assignment Details & Rubric")
     
-    assignment_type = st.selectbox("Assignment Type", ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)"])
+    assignment_type = st.selectbox(
+        "Assignment Type", 
+        ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)"]
+    )
     
-    # NEW UI: Rubric Selection Toggle
-    rubric_source = st.radio("Rubric Source", ["Use Pre-installed Default", "Upload Custom Rubric"], horizontal=True)
+    rubric_source = st.radio(
+        "Rubric Source", 
+        ["Use Pre-installed Default", "Upload Custom Rubric"], 
+        horizontal=True
+    )
     
     custom_rubric_file = None
     if rubric_source == "Upload Custom Rubric":
@@ -144,11 +192,9 @@ with col1:
         if not uploaded_pdfs:
             st.error("Please upload at least one PDF file.")
         else:
-            # Determine which rubric to use
             if rubric_source == "Upload Custom Rubric" and custom_rubric_file is not None:
                 rubric_text = pd.read_csv(custom_rubric_file).to_string()
             else:
-                # Fallback to defaults
                 filename = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
                 if os.path.exists(filename):
                     rubric_text = pd.read_csv(filename).to_string()
@@ -307,7 +353,6 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
                         save_grade(student_identifier, assignment_type, final_score, word_count)
                         
                         with st.expander(f"✅ Graded: {student_identifier} | Final Score: {final_score}", expanded=False):
-                            
                             if score_diff >= 10:
                                 st.warning(f"⚠️ **High Discrepancy Alert:** The models disagreed by {score_diff} points. Manual review recommended.")
                             else:
@@ -333,34 +378,41 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
             st.rerun()
 
 with col2:
-    st.markdown("<h3 class='gradebook-header'>📈 Class Analytics Dashboard</h3>", unsafe_allow_html=True)
-    df_grades = load_grades()
+    st.markdown("<div class='gradebook-header'>📈 Class Analytics Dashboard</div>", unsafe_allow_html=True)
     
-    if not df_grades.empty:
-        if len(df_grades.columns) >= 5:
-            df_grades.columns = ["Timestamp", "Student", "Assignment", "Score", "Word Count"]
-            
-        col_avg, col_count = st.columns(2)
-        
-        df_grades["Score"] = pd.to_numeric(df_grades["Score"], errors='coerce')
-        avg_score = df_grades["Score"].mean()
-        
-        col_avg.metric(label="Class Average", value=f"{avg_score:.1f}")
-        col_count.metric(label="Papers Graded", value=len(df_grades))
-        
-        st.markdown("**Score Distribution**")
-        st.bar_chart(df_grades.set_index("Student")["Score"])
-        
-        st.markdown("**Master Gradebook**")
-        st.dataframe(df_grades, use_container_width=True)
-        
-        csv = df_grades.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Export to Excel (.csv)",
-            data=csv,
-            file_name="ISTEK_Master_Gradebook.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+    # PRIVACY TOGGLE: Keeps gradebook hidden unless explicitly turned on
+    show_analytics = st.toggle("🔒 Privacy Mode: Show Student Scores & Analytics", value=False)
+    
+    if not show_analytics:
+        st.info("🙈 **Analytics Hidden for Privacy.** Switch the toggle above when you wish to view or present student grades.")
     else:
-        st.info("The database is currently empty. Upload and evaluate papers to see your analytics here.")
+        df_grades = load_grades()
+        
+        if not df_grades.empty:
+            if len(df_grades.columns) >= 5:
+                df_grades.columns = ["Timestamp", "Student", "Assignment", "Score", "Word Count"]
+                
+            col_avg, col_count = st.columns(2)
+            
+            df_grades["Score"] = pd.to_numeric(df_grades["Score"], errors='coerce')
+            avg_score = df_grades["Score"].mean()
+            
+            col_avg.metric(label="Class Average", value=f"{avg_score:.1f}")
+            col_count.metric(label="Papers Graded", value=len(df_grades))
+            
+            st.markdown("**Score Distribution**")
+            st.bar_chart(df_grades.set_index("Student")["Score"])
+            
+            st.markdown("**Master Gradebook**")
+            st.dataframe(df_grades, use_container_width=True)
+            
+            csv = df_grades.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Export to Excel (.csv)",
+                data=csv,
+                file_name="ISTEK_Master_Gradebook.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        else:
+            st.info("The database is currently empty. Upload and evaluate papers to see your analytics here.")
