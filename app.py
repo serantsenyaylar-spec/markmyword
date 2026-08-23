@@ -21,6 +21,9 @@ from googleapiclient.http import MediaIoBaseUpload
 DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
 SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
 
+# --- DOMAIN SECURITY POLICY ---
+ALLOWED_DOMAIN = "@istek.k12.tr"
+
 # --- PAGE SETTINGS & BRANDING ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
@@ -61,48 +64,41 @@ st.markdown("---")
 
 # --- GOOGLE AUTHENTICATION SECURITY GATE ---
 def check_authentication():
-    # Safe check for login status to prevent AttributeError crashes
     is_logged_in = False
     try:
         is_logged_in = getattr(st.user, "is_logged_in", False)
     except Exception:
         is_logged_in = False
 
-    # 1. If not logged in, prompt user to log in
     if not is_logged_in:
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
-        st.markdown("Please log in with your **@istek.edu.tr** account to access the grading portal.")
+        st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the grading portal.")
         if st.button("Log in with Google", type="primary", use_container_width=True):
             st.login("google")
         st.stop()
 
-    # 2. Extract email safely
     user_email = ""
     try:
         user_email = getattr(st.user, "email", "") or st.user.get("email", "")
     except Exception:
         user_email = ""
 
-    # 3. Enforce strict @istek.edu.tr domain policy
-    if not user_email.endswith("@istek.edu.tr"):
+    # Strictly enforce @istek.k12.tr domain
+    if not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
-        st.markdown("You must use an official İSTEK Schools email address to access this tool.")
+        st.markdown(f"You must sign in using your official **{ALLOWED_DOMAIN}** address.")
         if st.button("Sign out and try another account", type="primary", use_container_width=True):
             st.logout()
         st.stop()
 
-    # 4. Display status in sidebar once verified
     with st.sidebar:
         st.success("✅ Authenticated")
         st.markdown(f"**Logged in as:**\n{user_email}")
         if st.button("Log out"):
             st.logout()
 
-# Run auth check FIRST
+# Run authentication check before doing anything else
 check_authentication()
-
-
-# --- EVERYTHING BELOW THIS LINE ONLY APPEARS TO VERIFIED @ISTEK.EDU.TR USERS ---
 
 
 # --- GOOGLE SERVICES INTEGRATION ---
