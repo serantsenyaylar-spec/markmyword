@@ -293,6 +293,8 @@ def parse_json_response(raw_text):
     return json.loads(clean_text)
 
 def check_validity(res_dict):
+    if not isinstance(res_dict, dict):
+        return False
     val = res_dict.get("is_valid_submission", False)
     if isinstance(val, bool):
         return val
@@ -318,6 +320,7 @@ Return your evaluation EXACTLY as a JSON object matching this schema:
   "feedback": "..."
 }"""
 
+# Advanced Free Tier Option: gemini-3.7-flash
 def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
     try:
         if mime_type.startswith("text/"):
@@ -328,7 +331,7 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
             contents = [SYSTEM_PROMPT, user_prompt, doc_part]
 
         response = client.models.generate_content(
-            model="gemini-2.5-flash", 
+            model="gemini-3.7-flash", 
             contents=contents,
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
@@ -336,6 +339,7 @@ def run_gemini_structured(client, user_prompt, file_bytes, mime_type):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"Gemini Error: {str(e)}", "total_score": 0, "word_count": 0}
 
+# Advanced Paid Model Option: gpt-4o
 def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     try:
         if mime_type.startswith("text/"):
@@ -362,6 +366,7 @@ def run_gpt_structured(client, user_prompt, file_bytes, mime_type, file_name):
     except Exception as e:
         return {"is_valid_submission": False, "rejection_reason": f"GPT Error: {str(e)}", "total_score": 0, "word_count": 0}
 
+# Advanced Paid Model Option: claude-3-5-sonnet-20241022
 def run_claude_structured(client, user_prompt, file_bytes, mime_type):
     try:
         if mime_type.startswith("text/"):
@@ -398,10 +403,6 @@ hm1, hm2, hm3 = st.columns(3)
 hm1.metric("Papers Graded (Session)", f"{st.session_state.graded_count} / {MAX_PAPERS_PER_SESSION}")
 hm2.metric("Batch Limit per Run", "Unlimited" if IS_ADMIN else f"{MAX_FILES_PER_BATCH} Files")
 hm3.metric("Account Role", "👑 Admin User" if IS_ADMIN else "✅ Teacher User")
-
-if not IS_ADMIN:
-    quota_ratio = min(st.session_state.graded_count / MAX_PAPERS_PER_SESSION, 1.0)
-    st.progress(quota_ratio, text=f"Session Quota: {int(quota_ratio * 100)}% used")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -595,22 +596,28 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
                     res_o = f_gpt.result()
                     res_c = f_claude.result()
 
-                valid_results = [r for r in [res_g, res_o, res_c] if check_validity(r)]
+                all_responses = {"Gemini": res_g, "GPT-4o": res_o, "Claude": res_c}
+                valid_results = {name: r for name, r in all_responses.items() if check_validity(r)}
                 
                 if not valid_results:
-                    st.warning(f"⚠️ **Skipped ({file.name}):** Could not extract valid evaluation.")
-                    with st.expander(f"🔍 Diagnostic Model Logs ({file.name})"):
-                        st.write("Gemini Result:", res_g)
-                        st.write("GPT-4o Result:", res_o)
-                        st.write("Claude Result:", res_c)
+                    st.error(f"❌ **Evaluation Failed ({file.name}):** All AI models encountered API errors or billing quota limits.")
+                    with st.expander(f"🔍 API Billing & Error Diagnostics for `{file.name}`", expanded=True):
+                        for model_name, res in all_responses.items():
+                            reason = res.get("rejection_reason", "Unknown error")
+                            st.markdown(f"**{model_name} Error:** `{reason}`")
                     continue
 
                 st.session_state.graded_count += 1
 
-                scores = [res_g.get("total_score", 0), res_o.get("total_score", 0), res_c.get("total_score", 0)]
-                valid_scores = [r.get("total_score", 0) for r in valid_results]
+                valid_scores = [r.get("total_score", 0) for r in valid_results.values()]
                 final_score = round(sum(valid_scores) / len(valid_scores), 1)
-                word_count = res_g.get("word_count") or res_o.get("word_count") or res_c.get("word_count") or "N/A"
+
+                primary_res = list(valid_results.values())[0]
+                word_count = primary_res.get("word_count", "N/A")
+                transcribed_text = primary_res.get("transcribed_text", "N/A")
+                feedback = primary_res.get("feedback", "N/A")
+
+                scores_summary = f"Gemini: {res_g.get('total_score', 'Err')} | GPT-4o: {res_o.get('total_score', 'Err')} | Claude: {res_c.get('total_score', 'Err')}"
 
                 save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, total_rubric_scale)
 
@@ -620,16 +627,16 @@ Evaluate the submission. Calculate total_score based on rubric criteria out of {
 Student ID : {student_id} | Assignment: {assignment_type}
 Evaluated By: {USER_NAME} ({USER_EMAIL})
 Final Consensus Score: {final_score} / {total_rubric_scale}
-Gemini: {scores[0]} | GPT-4o: {scores[1]} | Claude: {scores[2]}
+Active Models Consensus: {scores_summary}
 ================================================================================
 Target Question / Prompt:
 {active_question}
 
 Transcribed Text:
-{res_g.get('transcribed_text') or res_o.get('transcribed_text') or res_c.get('transcribed_text') or 'N/A'}
+{transcribed_text}
 
 Feedback:
-{res_g.get('feedback') or res_o.get('feedback') or res_c.get('feedback') or 'N/A'}
+{feedback}
 ================================================================================
 """
                 report_bytes = report_text.encode("utf-8")
@@ -644,7 +651,7 @@ Feedback:
                     "final_score": final_score,
                     "total_scale": total_rubric_scale,
                     "word_count": word_count,
-                    "scores": scores,
+                    "scores": [res_g.get("total_score", "Err"), res_o.get("total_score", "Err"), res_c.get("total_score", "Err")],
                     "res_g": res_g,
                     "res_o": res_o,
                     "res_c": res_c,
@@ -653,7 +660,8 @@ Feedback:
                     "question": active_question
                 })
 
-        st.success("✅ Evaluation Complete! Switch to **Step 3** tab to view grades and download reports.")
+        if st.session_state.graded_results:
+            st.success("✅ Evaluation Complete! Switch to **Step 3** tab to view grades and download reports.")
 
 # --- TAB 3: EVALUATION & REPORTS ---
 with wizard_tab3:
@@ -707,7 +715,7 @@ with wizard_tab3:
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain", use_container_width=True)
 
                     st.divider()
-                    t1, t2, t3 = st.tabs(["🤖 Gemini", "🧠 GPT-4o", "🦉 Claude"])
+                    t1, t2, t3 = st.tabs(["🤖 Gemini 3.7", "🧠 GPT-4o", "🦉 Claude 3.5"])
                     with t1: st.json(item['res_g'])
                     with t2: st.json(item['res_o'])
                     with t3: st.json(item['res_c'])
