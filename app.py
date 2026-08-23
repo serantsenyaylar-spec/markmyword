@@ -22,8 +22,11 @@ from googleapiclient.http import MediaIoBaseUpload
 DRIVE_FOLDER_ID = "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
 SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
 
-# --- DOMAIN & RATE LIMIT SECURITY ---
+# --- DOMAIN SECURITY & ADMIN CONFIGURATION ---
 ALLOWED_DOMAIN = "@istek.k12.tr"
+ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
+
+# Standard Teacher Restrictions
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
 
@@ -84,7 +87,7 @@ col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 with col_logo:
     try:
         st.image("kurum_genel_logo_2_eng.png", use_container_width=True)
-    except:
+    except Exception:
         pass 
 
 with col_title:
@@ -93,7 +96,7 @@ with col_title:
 
 st.markdown("---")
 
-# --- AUTHENTICATION GATE ---
+# --- AUTHENTICATION & ROLE MANAGEMENT ---
 def check_authentication():
     is_logged_in = False
     try:
@@ -121,14 +124,27 @@ def check_authentication():
             st.logout()
         st.stop()
 
+    is_admin = user_email in ADMIN_EMAILS
+
     with st.sidebar:
-        st.success("✅ Authenticated")
-        st.markdown(f"**Logged in as:**\n{user_email}")
-        st.caption(f"Session Usage: {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
+        if is_admin:
+            st.success("👑 **Admin Access Granted**")
+            st.markdown(f"**Logged in as Superuser:**\n`{user_email}`")
+            st.info("⚡ Quota & File limits are **DISABLED** for your account.")
+            if st.button("Reset Session Quota Counter"):
+                st.session_state.graded_count = 0
+                st.rerun()
+        else:
+            st.success("✅ Authenticated")
+            st.markdown(f"**Logged in as Teacher:**\n{user_email}")
+            st.caption(f"Session Usage: {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
+
         if st.button("Log out"):
             st.logout()
 
-check_authentication()
+    return is_admin, user_email
+
+IS_ADMIN, USER_EMAIL = check_authentication()
 
 # --- HELPER FUNCTIONS ---
 def get_google_credentials():
@@ -277,26 +293,35 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("2. Upload Student Papers")
 uploaded_files = st.file_uploader(
-    f"Upload Student Work (Max {MAX_FILES_PER_BATCH} files at once: PDF, JPG, PNG)", 
+    f"Upload Student Work (PDF, JPG, PNG)", 
     type=["pdf", "png", "jpg", "jpeg", "webp"], 
     accept_multiple_files=True
 )
 
+if IS_ADMIN:
+    with st.expander("👑 Admin Tools & Live Grade Logs"):
+        if st.button("Fetch Google Sheet Grade Logs"):
+            try:
+                sheet = get_google_sheet()
+                records = sheet.get_all_records()
+                st.dataframe(pd.DataFrame(records), use_container_width=True)
+            except Exception as ex:
+                st.error(f"Could not load sheets: {str(ex)}")
+
 if st.button("Evaluate Papers", type="primary", use_container_width=True):
-    # Guardrail Check 1: File Existence
     if not uploaded_files:
         st.error("Please select at least one file to grade.")
         st.stop()
         
-    # Guardrail Check 2: Max Files Per Batch
-    if len(uploaded_files) > MAX_FILES_PER_BATCH:
-        st.error(f"⚠️ **Batch Limit Exceeded:** You can only upload a maximum of {MAX_FILES_PER_BATCH} papers per batch to protect server resources.")
-        st.stop()
+    # Enforce Limits only for non-admin teachers
+    if not IS_ADMIN:
+        if len(uploaded_files) > MAX_FILES_PER_BATCH:
+            st.error(f"⚠️ **Batch Limit Exceeded:** Teachers can upload a maximum of {MAX_FILES_PER_BATCH} papers per batch.")
+            st.stop()
 
-    # Guardrail Check 3: Session Quota
-    if st.session_state.graded_count + len(uploaded_files) > MAX_PAPERS_PER_SESSION:
-        st.error(f"🛑 **Session Limit Reached:** You have used your quota of {MAX_PAPERS_PER_SESSION} evaluations for this session. Please log out and back in if you need to evaluate more.")
-        st.stop()
+        if st.session_state.graded_count + len(uploaded_files) > MAX_PAPERS_PER_SESSION:
+            st.error(f"🛑 **Session Limit Reached:** Quota of {MAX_PAPERS_PER_SESSION} evaluations reached for this session.")
+            st.stop()
 
     # Load Rubric
     if rubric_source == "Upload Custom Rubric" and custom_rubric_file is not None:
@@ -318,7 +343,6 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
         file_bytes = file.getvalue()
         mime_type = get_file_mime_type(file.name)
         
-        # Save to Drive async/silent
         upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mime_type)
         
         with st.spinner(f"🚀 Running Parallel Tri-Model Consensus on {file.name}..."):
@@ -357,7 +381,6 @@ IMPORTANT: Output final data row as absolute last line:
 DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
 """
 
-            # PARALLEL THREADED API CALLS
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future_gemini = executor.submit(run_gemini, gemini_client, prompt, file_bytes, mime_type)
                 future_gpt = executor.submit(run_gpt, openai_client, prompt, file_bytes, mime_type, file.name)
@@ -367,12 +390,10 @@ DATA_ROW: [TOTAL_SCORE] | [WORD_COUNT]
                 gpt_score, gpt_text = future_gpt.result()
                 claude_score, claude_text = future_claude.result()
 
-            # Check if flagged as invalid file
             if "REJECTED:" in gemini_text and "REJECTED:" in gpt_text:
                 st.warning(f"⚠️ **File Skipped ({file.name}):** The AI flagged this file as unreadable or not a valid student paper.")
                 continue
 
-            # Update session counter
             st.session_state.graded_count += 1
 
             scores = [gemini_score, gpt_score, claude_score]
