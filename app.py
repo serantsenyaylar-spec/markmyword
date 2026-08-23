@@ -175,10 +175,10 @@ html, body, .stApp { font-family: 'Inter', sans-serif !important; }
 
                 st.markdown(f"""
                 <div class="chip-container">
-                    <span class="chip">🎯 Task Achievement: {task_ach}</span>
-                    <span class="chip">🧩 Organization: {org}</span>
-                    <span class="chip">✍️ Accuracy: {acc}</span>
-                    <span class="chip">📏 Words: {words}</span>
+                    <span class="chip">&#127919; Task Achievement: {task_ach}</span>
+                    <span class="chip">&#129513; Organization: {org}</span>
+                    <span class="chip">&#9997;&#65039; Accuracy: {acc}</span>
+                    <span class="chip">&#128207; Words: {words}</span>
                 </div>
                 """, unsafe_allow_html=True)
                 
