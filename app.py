@@ -98,7 +98,7 @@ def check_authentication():
     if not is_logged_in and not st.session_state.get("auth_user"):
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
         st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the portal.")
-        if st.button("Log in with Google", type="primary", use_container_width=True): 
+        if st.button("Log in with Google", type="primary", use_container_width=True, key="login_btn_google"): 
             st.login("google")
         st.stop()
 
@@ -108,7 +108,7 @@ def check_authentication():
 
     if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
-        if st.button("Sign out", type="primary", use_container_width=True):
+        if st.button("Sign out", type="primary", use_container_width=True, key="access_denied_signout_btn"):
             st.session_state.auth_user = None
             st.logout()
         st.stop()
@@ -136,7 +136,7 @@ def check_authentication():
 
         if is_admin:
             st.success("👑 **Admin Status: Active**")
-            if st.button("Reset Quota Counter", use_container_width=True):
+            if st.button("Reset Quota Counter", use_container_width=True, key="sidebar_reset_quota_btn"):
                 st.session_state.graded_count = 0
                 st.session_state.graded_results = []
                 st.rerun()
@@ -163,7 +163,7 @@ def check_authentication():
             """, unsafe_allow_html=True)
 
         st.divider()
-        if st.button("Log out", use_container_width=True):
+        if st.button("Log out", use_container_width=True, key="sidebar_logout_btn"):
             st.session_state.auth_user = None
             st.logout()
 
