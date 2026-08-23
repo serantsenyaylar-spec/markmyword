@@ -7,15 +7,15 @@ import sqlite3
 import re
 
 # --- PAGE SETTINGS & BRANDING ---
-st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide")
+st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 
-# Injecting SAFE Custom CSS
+# Injecting SAFE Custom CSS to completely remove the sidebar
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
     
-    /* Safely apply font ONLY to text elements, protecting icons and layout containers */
-    p, h1, h2, h3, h4, h5, h6, li, label {
+    /* Safely apply font ONLY to text elements */
+    p, h1, h2, h3, h4, h5, h6, li, label, span {
         font-family: 'Roboto', sans-serif !important;
     }
     
@@ -24,17 +24,20 @@ st.markdown("""
         background-color: #FFFFFF !important;
     }
     
-    /* Light grey sidebar for contrast */
-    [data-testid="stSidebar"] {
-        background-color: #F8F9FA !important;
-    }
+    /* --- NUKE ALL MENUS, SIDEBARS, AND ARROWS --- */
+    [data-testid="collapsedControl"] { display: none !important; }
+    [data-testid="stSidebar"] { display: none !important; }
+    [data-testid="stHeader"] { display: none !important; }
+    header { visibility: hidden !important; }
+    #MainMenu { visibility: hidden !important; }
+    footer { visibility: hidden !important; }
     
     /* İSTEK Brand Colors for Headers */
     h1, h2, h3, h4, h5, h6 { 
         color: #0055A5 !important; 
     }
     
-    /* Target ONLY the primary action buttons so the file uploader doesn't break */
+    /* Target ONLY the primary action buttons */
     button[kind="primary"] { 
         background-color: #0055A5 !important; 
         color: white !important; 
@@ -87,7 +90,7 @@ def clear_db():
 
 init_db()
 
-# --- UI HEADER (SMART LOGO INTEGRATION) ---
+# --- UI HEADER ---
 col_logo, col_title = st.columns([1, 4])
 with col_logo:
     if os.path.exists("kurum_genel_logo_2_eng.png"):
@@ -103,20 +106,25 @@ with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
 
-# --- SIDEBAR: SETTINGS ---
-st.sidebar.header("⚙️ Settings")
-api_key = st.sidebar.text_input("Enter Gemini API Key:", value="", type="password")
-st.sidebar.markdown("---")
-st.sidebar.subheader("📂 Custom Rubric")
-custom_rubric_file = st.sidebar.file_uploader("Upload a Custom CSV Rubric (Optional)", type=["csv"])
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🗑️ Clear Master Database"):
-    clear_db()
-    st.sidebar.success("Database cleared!")
-    st.rerun()
+# --- SETTINGS EXPANDER (Replaces Sidebar) ---
+with st.expander("⚙️ App Settings (API Key & Rubrics)", expanded=True):
+    col_api, col_rubric, col_db = st.columns([2, 2, 1])
+    
+    with col_api:
+        api_key = st.text_input("Enter Gemini API Key:", value="", type="password")
+    
+    with col_rubric:
+        custom_rubric_file = st.file_uploader("Upload Custom CSV Rubric (Optional)", type=["csv"])
+        
+    with col_db:
+        st.markdown("<br>", unsafe_allow_html=True) 
+        if st.button("🗑️ Clear Database", use_container_width=True):
+            clear_db()
+            st.success("Database cleared!")
+            st.rerun()
 
 # --- MAIN LAYOUT ---
+st.markdown("---")
 col1, col2 = st.columns([1, 1.2], gap="large")
 
 with col1:
@@ -128,7 +136,7 @@ with col1:
     
     if st.button("Evaluate Papers", type="primary", use_container_width=True):
         if not api_key:
-            st.error("Please enter your API Key in the sidebar.")
+            st.error("Please enter your API Key in the Settings box above.")
         elif not uploaded_pdfs:
             st.error("Please upload at least one PDF file.")
         else:
