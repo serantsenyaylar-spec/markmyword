@@ -21,15 +21,11 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- SECURE CONFIGURATION (STRICT SECRETS RETRIEVAL) ---
-DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID")
-SHEET_ID = st.secrets.get("SHEET_ID")
+# --- CONFIGURATION (ST.SECRETS WITH WORKING FALLBACKS) ---
+DRIVE_FOLDER_ID = st.secrets.get("DRIVE_FOLDER_ID", "1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k")
+SHEET_ID = st.secrets.get("SHEET_ID", "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE")
 ADMIN_EMAILS = st.secrets.get("ADMIN_EMAILS", ["serant.senyaylar@istek.k12.tr", "serantsenyaylar-spec"])
 ALLOWED_DOMAIN = "@istek.k12.tr"
-
-if not DRIVE_FOLDER_ID or not SHEET_ID:
-    st.error("⚙️ **Configuration Error:** Missing `DRIVE_FOLDER_ID` or `SHEET_ID` in Streamlit secrets.")
-    st.stop()
 
 # Standard Teacher Restrictions
 MAX_FILES_PER_BATCH = 5
@@ -411,7 +407,6 @@ if st.button("Evaluate Papers", type="primary", use_container_width=True):
 
 Check if submission contains legible handwritten/typed English work. If invalid, set is_valid_submission to false."""
 
-    # Persistent State Initialization
     st.session_state.graded_results = []
 
     for file in uploaded_files:
@@ -482,12 +477,12 @@ Feedback:
                 "report_fn": report_fn
             })
 
-# Render Persisted Evaluation Results Outside Button Context
+# Render Results
 if st.session_state.graded_results:
     graded_results = st.session_state.graded_results
     st.divider()
 
-    # ADMIN ONLY: Analytics Dashboard & Class Insights
+    # ADMIN ONLY: Analytics Dashboard
     if IS_ADMIN:
         st.markdown("### 📊 Admin Analytics & Class Performance")
         all_scores = [item["final_score"] for item in graded_results]
@@ -506,7 +501,7 @@ if st.session_state.graded_results:
         st.bar_chart(chart_data)
         st.divider()
 
-    # TEACHERS & ADMIN: ZIP Batch Download Button
+    # TEACHERS & ADMIN: ZIP Batch Download
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for item in graded_results:
@@ -523,12 +518,11 @@ if st.session_state.graded_results:
     )
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # TEACHERS & ADMIN: Document Preview Canvas & Side-by-Side View
+    # TEACHERS & ADMIN: Canvas Preview & Side-by-Side View
     for item in graded_results:
         with st.expander(f"✅ Graded: {item['student_id']} | Final Score: {item['final_score']}", expanded=True):
             col_canvas, col_details = st.columns([1, 1])
 
-            # Document Canvas Preview (Left) - Safari/Mobile Compatible
             with col_canvas:
                 st.markdown("#### 📄 Document Canvas Preview")
                 if "image" in item["mime_type"]:
@@ -544,13 +538,11 @@ if st.session_state.graded_results:
                 else:
                     st.info("Preview not supported for this file format.")
 
-            # Detailed AI Analysis & Admin Overrides (Right)
             with col_details:
                 st.markdown("#### 🎯 Evaluation Breakdown")
                 st.markdown(f"**Final Score:** `{item['final_score']} / 100` | **Word Count:** `{item['word_count']}`")
                 st.markdown(f"**Gemini:** {item['scores'][0]} | **GPT-4o:** {item['scores'][1]} | **Claude:** {item['scores'][2]}")
                 
-                # ADMIN ONLY: Score Override & Remarks
                 if IS_ADMIN:
                     st.divider()
                     st.markdown("##### ✏️ Admin Score Override & Feedback Adjuster")
