@@ -398,6 +398,26 @@ wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
 
 # --- TAB 1: SETUP ---
 with wizard_tab1:
+    # 1. Live Computer Local Time Header Widget
+    st.components.v1.html("""
+        <div style="background: rgba(128,128,128,0.08); border: 1px solid rgba(128,128,128,0.2); border-radius: 10px; padding: 10px 16px; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 1.2rem;">🕒</span>
+                <span style="font-weight: 600; font-size: 0.95rem; opacity: 0.9;">Connected Computer Local Time:</span>
+            </div>
+            <div id="live-clock" style="font-family: monospace; font-weight: 700; font-size: 1.05rem; color: #0d6efd;">Loading...</div>
+        </div>
+        <script>
+            function updateClock() {
+                const now = new Date();
+                const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' };
+                document.getElementById('live-clock').innerText = now.toLocaleString(undefined, options);
+            }
+            updateClock();
+            setInterval(updateClock, 1000);
+        </script>
+    """, height=65)
+
     st.markdown("#### ⚡ Quick Assignment Presets")
     qc1, qc2, qc3 = st.columns(3)
     with qc1:
@@ -425,7 +445,7 @@ with wizard_tab1:
             index=0 if "Essay" in st.session_state.preset_template else (1 if "Paragraph" in st.session_state.preset_template else 2)
         )
 
-        question_option = st.radio("Assignment Prompt Source", ["Use Preset Prompt", "Type Custom Prompt", "Upload File (.txt)"], horizontal=True)
+        question_option = st.radio("Assignment Prompt Source", ["Use Preset Prompt", "Type Custom Prompt", "Upload Question File (TXT, PDF, Image)"], horizontal=True)
         default_essay_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
         default_para_question = "Write a 70-90 word paragraph describing your ideal morning routine before school starts. Explain why each activity helps your day."
 
@@ -434,8 +454,32 @@ with wizard_tab1:
         elif question_option == "Type Custom Prompt":
             active_q = st.text_area("Enter Prompt for AI Evaluation:", value=st.session_state.active_question, height=110)
         else:
-            q_file = st.file_uploader("Upload Question File (.txt)", type=["txt"])
-            active_q = q_file.getvalue().decode("utf-8", errors="ignore") if q_file else st.session_state.active_question
+            q_file = st.file_uploader("Upload Question File (.txt, .pdf, .png, .jpg, .jpeg, .webp)", type=["txt", "pdf", "png", "jpg", "jpeg", "webp"])
+            if q_file:
+                q_bytes = q_file.getvalue()
+                q_mtype = mimetypes.guess_type(q_file.name)[0] or "text/plain"
+                
+                if q_file.name.endswith(".txt"):
+                    active_q = q_bytes.decode("utf-8", errors="ignore")
+                else:
+                    # Parse image/PDF prompt using Gemini Vision Engine
+                    gemini_key = get_secret("gemini_api_key")
+                    if gemini_key:
+                        try:
+                            g_client = genai.Client(api_key=gemini_key)
+                            doc_part = types.Part.from_bytes(data=q_bytes, mime_type=q_mtype)
+                            response = g_client.models.generate_content(
+                                model="gemini-3.6-flash",
+                                contents=["Extract and transcribe the essay prompt or question text from this document/image perfectly. Return ONLY the extracted text.", doc_part]
+                            )
+                            active_q = response.text.strip()
+                        except Exception as e:
+                            st.error(f"Error reading prompt file: {str(e)}")
+                            active_q = st.session_state.active_question
+                    else:
+                        active_q = "[Uploaded Prompt File: API Key required to read image/PDF]"
+            else:
+                active_q = st.session_state.active_question
 
         st.session_state.active_question = active_q
         st.info(f"📌 **Active Prompt Configured:**\n\n{st.session_state.active_question}")
@@ -451,16 +495,28 @@ with wizard_tab1:
         rubric_source = st.radio("Rubric Source", ["Use Default Rubric", "Upload Custom CSV Rubric"], horizontal=True)
 
         if rubric_source == "Upload Custom CSV Rubric" or assignment_type == "Custom Assignment":
-            with st.expander("📖 **Guide: How to Create & Upload Custom Rubrics**", expanded=True):
+            with st.expander("📖 **Interactive Builder: How to Create & Upload Custom Rubrics**", expanded=True):
                 st.markdown("""
-                * **Step 1:** Open **Google Sheets** or **Excel**.
-                * **Step 2:** Include 3 column headers: `Criteria`, `Max Score`, `Description`.
-                * **Step 3:** Save/Export as **Comma-separated values (.csv)** and upload below.
+                **Required CSV Column Layout:**
+                
+                | Criteria | Max Score | Description |
+                | :--- | :--- | :--- |
+                | `Task Achievement` | `35` | Fulfills prompt criteria and word count |
+                | `Organization` | `35` | Clear paragraphing and logical connectors |
+                | `Grammar & Vocabulary` | `30` | Accurate syntax, spelling, and word choices |
+
+                ---
+                **Step-by-Step Instructions:**
+                1. Open **Google Sheets** or **Microsoft Excel**.
+                2. Set row 1 exact header titles: **`Criteria`**, **`Max Score`**, **`Description`**.
+                3. Fill in your criteria rows and point distributions.
+                4. Go to **File ➔ Download ➔ Comma-separated values (.csv)**.
+                5. Upload your `.csv` file below.
                 """)
                 st.download_button(
-                    label="📥 Download Sample Rubric (.csv)",
-                    data="Criteria,Max Score,Description\nContent & Ideas,40,Clear response to prompt\nStructure & Grammar,30,Logical flow and precision\nVocabulary,30,Varied range of lexical items",
-                    file_name="Sample_Rubric_Template.csv",
+                    label="📥 Download Standard CSV Template",
+                    data="Criteria,Max Score,Description\nTask Achievement,35,Fulfills prompt requirements completely\nOrganization,35,Logical structure and sentence flow\nGrammar & Vocabulary,30,Punctuation, spelling, and sentence range",
+                    file_name="Standard_Rubric_Template.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
@@ -486,7 +542,7 @@ with wizard_tab1:
         scaled_rubric_df = scale_rubric_dataframe(active_base_df, target_scale)
         st.dataframe(scaled_rubric_df, height=150, use_container_width=True)
         st.session_state.raw_rubric = scaled_rubric_df.to_string()
-
+        
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
 with wizard_tab2:
     st.markdown("#### 📤 Upload Student Submissions")
