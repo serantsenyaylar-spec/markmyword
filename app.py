@@ -13,7 +13,7 @@ from googleapiclient.http import MediaIoBaseUpload
 
 # ⚠️ PASTE YOUR GOOGLE DRIVE FOLDER ID HERE
 DRIVE_FOLDER_ID = "https://drive.google.com/drive/u/0/folders/1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
-
+SHEET_ID = "1F4YZZ9h3BLWplZFCKWE0X7yFldcXSnw38Bri_zUtb6QE"
 # --- PAGE SETTINGS & BRANDING ---
 st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 
