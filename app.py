@@ -1,13 +1,20 @@
-import streamlit as st
++import streamlit as st
 from google import genai
 from google.genai import types
 import pandas as pd
 import os
 import sqlite3
 import re
+import json
+from io import BytesIO
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+
+# ⚠️ PASTE YOUR GOOGLE DRIVE FOLDER ID HERE
+DRIVE_FOLDER_ID = "https://drive.google.com/drive/u/0/folders/1mlGrUzpwMxWRhLcXCEl9Y9u-DLeqnr6k"
 
 # --- PAGE SETTINGS & BRANDING ---
-# initial_sidebar_state="collapsed" hides it by default but keeps the arrow working perfectly!
 st.set_page_config(page_title="Mark My Words", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 
 # Injecting HIGHLY SAFE Custom CSS
@@ -15,28 +22,12 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
     
-    /* Safely apply font ONLY to paragraphs and headers. 
-       We leave spans and labels alone so Streamlit's double-arrow and icons don't break! */
-    p, h1, h2, h3, h4, h5, h6 {
-        font-family: 'Roboto', sans-serif !important;
-    }
+    p, h1, h2, h3, h4, h5, h6 { font-family: 'Roboto', sans-serif !important; }
+    [data-testid="stAppViewContainer"] { background-color: #FFFFFF !important; }
+    [data-testid="stSidebar"] { background-color: #F8F9FA !important; }
     
-    /* Force Pure White Main Background */
-    [data-testid="stAppViewContainer"] {
-        background-color: #FFFFFF !important;
-    }
+    h1, h2, h3, h4, h5, h6 { color: #0055A5 !important; }
     
-    /* Light grey sidebar for contrast when opened */
-    [data-testid="stSidebar"] {
-        background-color: #F8F9FA !important;
-    }
-    
-    /* İSTEK Brand Colors for Headers */
-    h1, h2, h3, h4, h5, h6 { 
-        color: #0055A5 !important; 
-    }
-    
-    /* Target ONLY the primary blue evaluation button */
     button[kind="primary"] { 
         background-color: #0055A5 !important; 
         color: white !important; 
@@ -56,28 +47,28 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-# --- SECURITY GATE ---
-def check_password():
-    """Returns `True` if the user had the correct password."""
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
 
-    if not st.session_state.authenticated:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.warning("🔒 **Restricted Access:** Teacher Portal Only")
-            password = st.text_input("Enter School Passcode:", type="password")
-            if st.button("Login", type="primary", use_container_width=True):
-                # CHANGE "ISTEKTEACHER" TO WHATEVER PASSWORD YOU WANT
-                if password == "ISTEKTEACHER": 
-                    st.session_state.authenticated = True
-                    st.rerun()
-                else:
-                    st.error("😕 Incorrect passcode.")
-        st.stop()  # Do not continue running the rest of the app!
+# --- GOOGLE DRIVE UPLOAD FUNCTION ---
+def upload_pdf_to_drive(pdf_bytes, file_name, folder_id):
+    try:
+        creds_json = json.loads(st.secrets["google_credentials"])
+        creds = service_account.Credentials.from_service_account_info(
+            creds_json, scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        service = build('drive', 'v3', credentials=creds)
+        
+        file_metadata = {
+            'name': file_name,
+            'parents': [folder_id]
+        }
+        
+        media = MediaIoBaseUpload(BytesIO(pdf_bytes), mimetype='application/pdf', resumable=True)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return True
+    except Exception as e:
+        st.error(f"Google Drive Upload Error for {file_name}: {str(e)}")
+        return False
 
-# Call the security check before anything else loads
-check_password()
 # --- DATABASE SETUP ---
 def init_db():
     conn = sqlite3.connect('gradebook.db')
@@ -172,6 +163,10 @@ with col1:
             for pdf_file in uploaded_pdfs:
                 student_identifier = pdf_file.name.replace('.pdf', '')
                 pdf_bytes = pdf_file.getvalue()
+                
+                # --- NEW: Upload to Google Drive ---
+                with st.spinner(f"Saving {pdf_file.name} to Drive..."):
+                    upload_pdf_to_drive(pdf_bytes, pdf_file.name, DRIVE_FOLDER_ID)
                 
                 with st.spinner(f"Evaluating {pdf_file.name}..."):
                     prompt = f"""
