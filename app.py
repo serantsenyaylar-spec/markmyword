@@ -9,8 +9,10 @@ import mimetypes
 import zipfile
 import io
 import time
+import logging
 import concurrent.futures
 from io import BytesIO
+from pydantic import BaseModel
 import plotly.express as px
 
 # --- FREE API INTEGRATIONS ---
@@ -28,8 +30,20 @@ st.set_page_config(
     page_icon="📝", 
     layout="wide", 
     initial_sidebar_state="collapsed"
-)
-
+    
+# --- PYDANTIC SCHEMA FOR GEMINI STRUCTURED OUTPUT ---
+class GradingOutput(BaseModel):
+    is_valid_submission: bool
+    rejection_reason: str
+    transcribed_text: str
+    red_pen_corrections: str
+    word_count: int
+    score_task_achievement: float
+    score_organization: float
+    score_accuracy: float
+    total_score: float
+    feedback: str
+    
 # --- SECRETS & AUTH HELPERS ---
 def get_secret(key_name):
     """Fetches secrets safely from Streamlit secrets or OS environment."""
@@ -52,7 +66,7 @@ def get_google_credentials():
         ]
         return Credentials.from_service_account_info(creds_json, scopes=scopes)
     except Exception as e:
-       logging.error(f"Error initializing Google credentials: {e}")
+        logging.error(f"Error initializing Google credentials: {e}")
         return None
 
 # --- CONFIGURATION & CONSTANTS ---
@@ -197,14 +211,12 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 if not st.session_state.get("user_session_logged", False):
     st.session_state.user_session_logged = True
     log_user_login(USER_NAME, USER_EMAIL)
-
+    
 # --- ENHANCED CSS STYLING ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 html, body, .stApp { font-family: 'Inter', sans-serif !important; }
-
-/* ... [Your previous CSS for Stepper and User Card] ... */
 
 /* Category Chip Styling */
 .chip-container { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
@@ -217,25 +229,6 @@ html, body, .stApp { font-family: 'Inter', sans-serif !important; }
 }
 </style>
 """, unsafe_allow_html=True)
-
-# Category score chips
-p_res = item["res_primary"]
-
-# Sanitize AI outputs before HTML injection
-task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
-org = html.escape(str(p_res.get('score_organization', 'N/A')))
-acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
-words = html.escape(str(item.get('word_count', 'N/A')))
-
-st.markdown(
-    f'<div class="chip-container">'
-    f'<span class="chip">&#127919; Task Achievement: {task_ach}</span>'
-    f'<span class="chip">&#129513; Organization: {org}</span>'
-    f'<span class="chip">&#9997;&#65039; Accuracy: {acc}</span>'
-    f'<span class="chip">&#128207; Words: {words}</span>'
-    f'</div>',
-    unsafe_allow_html=True
-)
 
 # --- SESSION STATE INITIALIZATION ---
 default_states = {
@@ -264,23 +257,7 @@ if not st.session_state.get("user_session_logged", False):
     st.session_state.user_session_logged = True
     log_user_login(USER_NAME, USER_EMAIL)
 
-# --- GOOGLE WORKSPACE ---
-def get_google_credentials():
-    """Fetches and builds Google Service Account credentials."""
-    creds_secret = get_secret("gcp_service_account") or get_secret("google_credentials")
-    if not creds_secret: 
-        return None
-    try:
-        creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
-        scopes = [
-            'https://www.googleapis.com/auth/drive.file',
-            'https://www.googleapis.com/auth/spreadsheets'
-        ]
-        return service_account.Credentials.from_service_account_info(creds_json, scopes=scopes)
-    except Exception as e:
-        print(f"Credentials Error: {e}")
-        return None
-
+# --- GOOGLE WORKSPACE DRIVE & SHEETS ---
 def upload_file_to_drive(file_bytes, filename, folder_id, mime_type):
     """Uploads the file to Google Drive using unified credentials."""
     try:
@@ -309,7 +286,6 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
 
         client = gspread.authorize(creds)
         
-        # Open using SHEET_ID if present; fallback to string title
         sheet_id = get_secret("SHEET_ID")
         if sheet_id:
             sheet = client.open_by_key(sheet_id).sheet1
@@ -324,7 +300,7 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
         print(f"Sheets Save Error: {e}")
         return False
 
-# --- UI BADGES & HELPERS ---
+--- UI BADGES & HELPERS ---
 def get_score_badge(score, max_score):
     """Generates a colored HTML badge for Tab 3 based on the grade percentage."""
     try:
@@ -395,6 +371,54 @@ def check_validity(result):
     if not isinstance(result["total_score"], (int, float)):
         return False
     return True
+
+def run_gemini_structured(client, model_name, user_prompt, file_bytes, mime_type):
+    """Executes Gemini API safely across main or background threads."""
+    if not client:
+        return {}
+    try:
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                    types.Part.from_text(text=user_prompt)
+                ]
+            )
+        ]
+        
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=GradingOutput
+            )
+        )
+        return json.loads(response.text)
+
+    except Exception as e:
+        print(f"[Gemini Worker Error] {model_name}: {str(e)}")
+        return {}
+
+def run_groq_structured(client, user_prompt, text_content):
+    """Executes Groq API safely across main or background threads."""
+    if not client or not text_content:
+        return {}
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are an expert academic evaluator. Return JSON matching the expected schema."},
+                {"role": "user", "content": f"{user_prompt}\n\n<student_submission>\n{text_content}\n</student_submission>"}
+            ],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(completion.choices[0].message.content)
+
+    except Exception as e:
+        print(f"[Groq Worker Error]: {str(e)}")
+        return {}
     
 # --- EVALUATION RUNNERS ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
@@ -468,7 +492,7 @@ def run_groq_structured(client, user_prompt, text_content):
         print(f"[Groq Worker Error]: {str(e)}")
         return {}
 
-# --- HEADER & STEPPER ---
+--- HEADER & STEPPER ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 
 with col_logo:
@@ -489,17 +513,16 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- WIZARD TABS ---
+- WIZARD TABS ---
 wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
     "⚙️ Step 1: Setup", 
     "📤 Step 2: Upload & Process", 
     "📊 Step 3: Class Analytics & Reports"
 ])
 
-# --- TAB 1: SETUP ---
+-- TAB 1: SETUP ---
 with wizard_tab1:
     
-    # 1. LIVE SYSTEM CLOCK COMPONENT
     st.components.v1.html(
         """
         <div style="
@@ -866,21 +889,21 @@ with wizard_tab3:
                         st.success("Grade updated!")
                         st.rerun()
 
-                # Category score chips (Tab 3)
-p_res = item["res_primary"]
-task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
-org = html.escape(str(p_res.get('score_organization', 'N/A')))
-acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
-words = html.escape(str(item.get('word_count', 'N/A')))
+                # Category score chips
+                p_res = item["res_primary"]
+                task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
+                org = html.escape(str(p_res.get('score_organization', 'N/A')))
+                acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
+                words = html.escape(str(item.get('word_count', 'N/A')))
 
-st.markdown(f"""
-<div class="chip-container">
-    <span class="chip">🎯 Task Achievement: {task_ach}</span>
-    <span class="chip">🧩 Organization: {org}</span>
-    <span class="chip">✍️ Accuracy: {acc}</span>
-    <span class="chip">📏 Words: {words}</span>
-</div>
-""", unsafe_allow_html=True)
+                st.markdown(f"""
+                <div class="chip-container">
+                    <span class="chip">🎯 Task Achievement: {task_ach}</span>
+                    <span class="chip">🧩 Organization: {org}</span>
+                    <span class="chip">✍️ Accuracy: {acc}</span>
+                    <span class="chip">📏 Words: {words}</span>
+                </div>
+                """, unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 col_canvas, col_details = st.columns([1, 1])
@@ -901,7 +924,7 @@ st.markdown(f"""
                     st.markdown(f"**Detailed Feedback:**\n{p_res.get('feedback', 'N/A')}")
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain")
 
-        # --- ADMIN CONTROL PANEL (EXTRACTED OUTSIDE STUDENT CARD LOOP) ---
+# --- ADMIN CONTROL PANEL ---
         if IS_ADMIN:
             st.divider()
             st.markdown("### 🔐 Admin Control Panel")
