@@ -44,7 +44,22 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
-        
+
+def log_user_session(user_email):
+    if USER_EMAIL:
+    log_user_session(USER_EMAIL)
+    """Logs user access immediately upon page visit."""
+    if "session_logged" not in st.session_state:
+        try:
+            supabase.table("user_logs").insert({
+                "user_email": user_email,
+                "action": "User Access",
+                "details": "Opened app session"
+            }).execute()
+            st.session_state.session_logged = True
+        except Exception as e:
+            print(f"Error logging session: {e}")
+            
 def log_user_login(user_name, user_email):
     """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
     try:
@@ -993,25 +1008,34 @@ with t3_sub2:
                     st.markdown(f"**Detailed Feedback:**\n{p_res.get('feedback', 'N/A')}")
 
 # --- TAB 4: ADMIN PANEL (VISIBLE ONLY TO ADMINS) ---
+
 if IS_ADMIN and admin_tab:
-   with admin_tab:
+  with admin_tab:
     st.markdown("### 🛡️ İSTEK Admin Command Center")
-    if st.button("🔄 Refresh System Data", key="admin_refresh_btn"):
-        st.rerun()
-
-    admin_sub1, admin_sub2, admin_sub3 = st.tabs([
-        "📊 Academic & Pedagogical Insights", 
-        "📝 Essay History & Audit Trail", 
-        "🚦 Operational & Quota Control"
-    ])
-
-    # Fetch essay records once for all admin sub-tabs
-    essay_data = []
+    
+    # --- PASTE HERE: LIVE WEBSITE LOGIN NOTIFICATIONS ---
     try:
-        res = supabase.table("essay_memory").select("*").order("created_at", desc=True).execute()
-        essay_data = res.data or []
+        logs_res = supabase.table("user_logs").select("*").order("created_at", desc=True).limit(20).execute()
+        logs_data = logs_res.data or []
     except Exception as e:
-        st.error(f"Error connecting to Supabase: {e}")
+        logs_data = []
+
+    # Toast alert for new logins
+    if logs_data:
+        latest_log = logs_data[0]
+        if st.session_state.get("last_seen_log_id") != latest_log["id"]:
+            st.toast(f"🚨 **Live Access Alert:** {latest_log['user_email']} just opened the app!", icon="👤")
+            st.session_state.last_seen_log_id = latest_log["id"]
+
+    st.markdown("#### 🔔 Real-Time User Activity Feed")
+    if logs_data:
+        df_logs = pd.DataFrame(logs_data)
+        df_logs["created_at"] = pd.to_datetime(df_logs["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
+        st.dataframe(df_logs[["created_at", "user_email", "action", "details"]], use_container_width=True, hide_index=True)
+    else:
+        st.info("No active user logins recorded yet.")
+        
+    st.divider()
 
     # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
     with admin_sub1:
