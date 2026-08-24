@@ -46,7 +46,12 @@ def extract_text_from_file(uploaded_file):
         return None
 
 # Initialize Supabase client
-supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
+if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
+    supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+else:
+    supabase = None
+    st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
 
 def save_teacher_exemplar(student_text, rubric_type, teacher_score, teacher_feedback):
     """Converts student text to a vector embedding and saves the teacher's grade to Supabase."""
