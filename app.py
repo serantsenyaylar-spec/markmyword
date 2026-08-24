@@ -300,65 +300,67 @@ if not st.session_state.get("user_session_logged", False):
     st.session_state.user_session_logged = True
     log_user_login(USER_NAME, USER_EMAIL)
     
-# --- ENHANCED UI & CSS STYLING ---
+# --- ENHANCED UI & CSS STYLING (DARK MODE) ---
 st.markdown("""
 <style>
-    /* 1. Global Font and Soft Background */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif !important;
     }
     
+    /* 1. Main Background */
     .stApp {
-        background-color: #F4F6F9; /* Very soft grayish blue to reduce eye strain */
+        background-color: #0F172A !important; /* Deep Slate */
     }
 
     /* 2. Floating Card Effect for Expanders */
     div[data-testid="stExpander"] {
-        background-color: #FFFFFF;
+        background-color: #1E293B !important; /* Lighter Slate for Cards */
         border-radius: 12px !important;
-        border: 1px solid #E5E7EB !important;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        border: 1px solid #334155 !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
         margin-bottom: 15px;
         transition: all 0.2s ease-in-out;
     }
     div[data-testid="stExpander"]:hover {
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.15);
+        border-color: #475569 !important;
     }
     
     /* 3. Modern Segmented Tabs */
     div[data-testid="stTabs"] {
-        background-color: #FFFFFF;
+        background-color: #1E293B !important;
         padding: 10px 20px 20px 20px;
         border-radius: 16px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        border: 1px solid #334155;
     }
     button[data-baseweb="tab"] {
         background-color: transparent !important;
         border: none !important;
-        color: #6B7280 !important;
+        color: #94A3B8 !important; /* Muted Gray for unselected */
         font-weight: 600 !important;
         padding-top: 10px;
         padding-bottom: 10px;
     }
     button[data-baseweb="tab"][aria-selected="true"] {
-        color: #1E3A8A !important; /* Deep ISTIK Blue */
-        border-bottom: 3px solid #1E3A8A !important;
+        color: #60A5FA !important; /* Bright Blue for selected */
+        border-bottom: 3px solid #60A5FA !important;
     }
 
     /* 4. Beautiful Buttons */
     div[data-testid="stButton"] button {
         border-radius: 8px !important;
         font-weight: 600 !important;
-        border: none !important;
         transition: all 0.2s;
     }
     /* Primary Button Style */
     div[data-testid="stButton"] button[kind="primary"] {
-        background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important;
+        background: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%) !important;
         color: white !important;
-        box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.3);
+        border: none !important;
+        box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
     }
     div[data-testid="stButton"] button[kind="primary"]:hover {
         transform: translateY(-2px);
@@ -367,39 +369,29 @@ st.markdown("""
 
     /* 5. Clean DataFrames/Tables */
     div[data-testid="stDataFrame"] {
-        background-color: white;
+        background-color: #1E293B !important;
         border-radius: 10px;
         padding: 10px;
-        border: 1px solid #E5E7EB;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        border: 1px solid #334155 !important;
     }
 
-    /* 6. Existing Custom Elements (Wizard & Chips) */
+    /* 6. Chips (Badges) */
     .chip-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
     .chip { padding: 4px 12px; border-radius: 16px; font-size: 0.85rem; font-weight: 500; }
-    .chip-green { background-color: #d1fae5; color: #065f46; border: 1px solid #34d399; }
-    .chip-blue { background-color: #dbeafe; color: #1e40af; border: 1px solid #60a5fa; }
-    .chip-red { background-color: #fee2e2; color: #b91c1c; border: 1px solid #f87171; }
+    .chip-green { background-color: rgba(16, 185, 129, 0.2); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .chip-blue { background-color: rgba(59, 130, 246, 0.2); color: #60A5FA; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .chip-red { background-color: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid rgba(239, 68, 68, 0.3); }
     
-    /* Wizard Steps */
-    .wizard-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; background: white; padding: 20px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+    /* 7. Wizard Steps */
+    .wizard-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; background: #1E293B; padding: 20px; border-radius: 16px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
     .wizard-step { display: flex; flex-direction: column; align-items: center; position: relative; z-index: 1; flex: 1; }
-    .wizard-icon { width: 45px; height: 45px; border-radius: 50%; background-color: #f3f4f6; color: #9ca3af; display: flex; justify-content: center; align-items: center; font-size: 1.2rem; font-weight: bold; margin-bottom: 8px; border: 2px solid #e5e7eb; transition: all 0.3s ease; }
-    .wizard-step.active .wizard-icon { background-color: #2563EB; color: white; border-color: #2563EB; box-shadow: 0 0 15px rgba(37, 99, 235, 0.4); }
-    .wizard-label { font-size: 0.85rem; font-weight: 600; color: #6b7280; text-align: center; }
-    .wizard-step.active .wizard-label { color: #1f2937; }
-    .wizard-line { position: absolute; top: 22px; left: 50%; right: -50%; height: 3px; background-color: #e5e7eb; z-index: 0; }
+    .wizard-icon { width: 45px; height: 45px; border-radius: 50%; background-color: #0F172A; color: #64748B; display: flex; justify-content: center; align-items: center; font-size: 1.2rem; font-weight: bold; margin-bottom: 8px; border: 2px solid #334155; transition: all 0.3s ease; }
+    .wizard-step.active .wizard-icon { background-color: #3B82F6; color: white; border-color: #60A5FA; box-shadow: 0 0 15px rgba(59, 130, 246, 0.4); }
+    .wizard-label { font-size: 0.85rem; font-weight: 600; color: #94A3B8; text-align: center; }
+    .wizard-step.active .wizard-label { color: #F8FAFC; }
+    .wizard-line { position: absolute; top: 22px; left: 50%; right: -50%; height: 3px; background-color: #334155; z-index: 0; }
     .wizard-step:last-child .wizard-line { display: none; }
 </style>
-""", unsafe_allow_html=True)
-
-# Hide Streamlit default top branding
-st.markdown("""
-    <style>
-        header {visibility: hidden;}
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-    </style>
 """, unsafe_allow_html=True)
 
 # --- SESSION STATE INITIALIZATION ---
