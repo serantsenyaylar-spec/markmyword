@@ -494,7 +494,7 @@ def run_groq_structured(client, user_prompt, text_content):
         print(f"[Groq Worker Error]: {str(e)}")
         return {}
 
---- HEADER & STEPPER ---
+# --- HEADER & STEPPER ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
 
 with col_logo:
