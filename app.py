@@ -52,7 +52,7 @@ def get_google_credentials():
         ]
         return Credentials.from_service_account_info(creds_json, scopes=scopes)
     except Exception as e:
-        print(f"Error initializing Google credentials: {e}")
+       logging.error(f"Error initializing Google credentials: {e}")
         return None
 
 # --- CONFIGURATION & CONSTANTS ---
@@ -197,39 +197,6 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 if not st.session_state.get("user_session_logged", False):
     st.session_state.user_session_logged = True
     log_user_login(USER_NAME, USER_EMAIL)
-    
-# --- GOOGLE AUTH HELPER ---
-def get_google_credentials():
-    """Unified Google OAuth2 Service Account Credentials helper."""
-    creds_secret = get_secret("gcp_service_account") or get_secret("google_credentials")
-    
-    if not creds_secret:
-        return None
-        
-    try:
-        from google.oauth2.service_account import Credentials
-        
-        # Safely parse JSON if passed as a string
-        creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
-        
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/drive.file"
-        ]
-        return Credentials.from_service_account_info(creds_json, scopes=scopes)
-        
-    except Exception as e:
-        st.error(f"Error initializing Google credentials: {e}")
-        return None
-
-# --- PAGE SETUP (Must be the first Streamlit command) ---
-st.set_page_config(
-    page_title="Mark My Words | İSTEK", 
-    page_icon="📝", 
-    layout="wide", 
-    initial_sidebar_state="collapsed"
-)
 
 # --- ENHANCED CSS STYLING ---
 st.markdown("""
@@ -237,53 +204,8 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 html, body, .stApp { font-family: 'Inter', sans-serif !important; }
 
-/* Custom Step Stepper */
-.stepper-container {
-    display: flex;
-    justify-content: space-between;
-    background: var(--secondary-background-color);
-    padding: 12px 20px;
-    border-radius: 12px;
-    margin-bottom: 20px;
-    border: 1px solid rgba(128, 128, 128, 0.2);
-}
-.stepper-item {
-    font-weight: 700;
-    font-size: 0.9rem;
-    color: var(--text-color);
-    opacity: 0.8;
-}
+/* ... [Your previous CSS for Stepper and User Card] ... */
 
-/* User Card */
-.user-card {
-    background-color: var(--secondary-background-color);
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid rgba(128, 128, 128, 0.2);
-    margin-bottom: 10px;
-}
-.user-card-name { font-weight: 700; font-size: 1.05rem; }
-.user-card-email { font-size: 0.82rem; opacity: 0.8; word-break: break-all; }
-
-# Category score chips
-                p_res = item["res_primary"]
-                
-                # Sanitize AI outputs before HTML injection
-                task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
-                org = html.escape(str(p_res.get('score_organization', 'N/A')))
-                acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
-                words = html.escape(str(item['word_count']))
-
-                st.markdown(
-                    f'<div class="chip-container">'
-                    f'<span class="chip">&#127919; Task Achievement: {task_ach}</span>'
-                    f'<span class="chip">&#129513; Organization: {org}</span>'
-                    f'<span class="chip">&#9997;&#65039; Accuracy: {acc}</span>'
-                    f'<span class="chip">&#128207; Words: {words}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-                
 /* Category Chip Styling */
 .chip-container { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .chip {
@@ -295,6 +217,25 @@ html, body, .stApp { font-family: 'Inter', sans-serif !important; }
 }
 </style>
 """, unsafe_allow_html=True)
+
+# Category score chips
+p_res = item["res_primary"]
+
+# Sanitize AI outputs before HTML injection
+task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
+org = html.escape(str(p_res.get('score_organization', 'N/A')))
+acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
+words = html.escape(str(item.get('word_count', 'N/A')))
+
+st.markdown(
+    f'<div class="chip-container">'
+    f'<span class="chip">&#127919; Task Achievement: {task_ach}</span>'
+    f'<span class="chip">&#129513; Organization: {org}</span>'
+    f'<span class="chip">&#9997;&#65039; Accuracy: {acc}</span>'
+    f'<span class="chip">&#128207; Words: {words}</span>'
+    f'</div>',
+    unsafe_allow_html=True
+)
 
 # --- SESSION STATE INITIALIZATION ---
 default_states = {
@@ -314,108 +255,6 @@ default_states = {
 for key, val in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = val
-        
-# --- IDENTITY & AUTHENTICATION ---
-def extract_user_identity():
-    user_email, user_name = "", ""
-    try:
-        user_email = getattr(st.user, "email", "") or st.user.get("email", "")
-        user_name = getattr(st.user, "name", "") or st.user.get("name", "")
-    except Exception:
-        pass
-
-    if user_email and not user_name:
-        name_part = user_email.split("@")[0]
-        user_name = " ".join([t.capitalize() for t in name_part.split(".")])
-
-    if user_email:
-        st.session_state.auth_user = {"email": user_email, "name": user_name or "Teacher User"}
-    elif st.session_state.get("auth_user"):
-        user_email = st.session_state.auth_user.get("email", "")
-        user_name = st.session_state.auth_user.get("name", "")
-
-    return user_email, user_name or "Teacher User"
-
-def check_authentication():
-    is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
-
-    if not is_logged_in and not st.session_state.get("auth_user"):
-        st.warning("🔒 **Restricted Access:** Teacher Portal Only")
-        st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the portal.")
-        if st.button("Log in with Google", type="primary", use_container_width=True): 
-            st.login("google")
-        st.stop()
-
-    user_email, user_name = extract_user_identity()
-    admin_list = ADMIN_EMAILS if isinstance(ADMIN_EMAILS, list) else [ADMIN_EMAILS]
-    is_admin = any(str(admin).strip().lower() == user_email.strip().lower() for admin in admin_list)
-
-    if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
-        st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
-        if st.button("Sign out", type="primary", use_container_width=True):
-            st.session_state.auth_user = None
-            st.logout()
-        st.stop()
-
-    with st.sidebar:
-        # 1. Connection Status Badge
-        st.markdown("""
-        <div style="background-color: rgba(40, 167, 69, 0.12); border: 1px solid #28a745; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
-            <span style="height: 10px; width: 10px; background-color: #28a745; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px #28a745;"></span>
-            <span style="color: #28a745; font-weight: 700; font-size: 0.85rem;">Connection: Active</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # 2. Account Details
-        name_parts = user_name.strip().split(" ", 1)
-        first_name = name_parts[0] if len(name_parts) > 0 else "Teacher"
-        surname = name_parts[1] if len(name_parts) > 1 else "—"
-
-        st.markdown("### 👤 **Account Details**")
-        st.markdown(f"""
-        <div class="user-card" style="background-color: var(--secondary-background-color); padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); margin-bottom: 15px;">
-            <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>First Name:</b> {html.escape(first_name)}</div>
-            <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>Surname:</b> {html.escape(surname)}</div>
-            <div style="font-size: 0.82rem; opacity: 0.85; word-break: break-all;"><b>Mail:</b> {html.escape(user_email or 'Verified User')}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        if is_admin:
-            st.success("👑 **Admin Status: Active**")
-            if st.button("Reset Quota Counter", use_container_width=True):
-                st.session_state.graded_count = 0
-                st.session_state.graded_results = []
-                st.rerun()
-        else:
-            st.info(f"📊 **Session Usage:** {st.session_state.graded_count}/{MAX_PAPERS_PER_SESSION} papers")
-
-        st.divider()
-
-        # 3. Google Workspace Links (Updated Icon URL)
-        st.markdown("### 🌐 **Workspace Links**")
-
-        workspace_links = [
-            {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg"},
-            {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/1/12/Google_Drive_icon_%282020%29.svg"},
-            {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/ae/Google_Sheets_2020_Logo.svg"},
-            {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://upload.wikimedia.org/wikipedia/commons/0/01/Google_Docs_2020_Logo.svg"},
-            {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg"}
-        ]
-
-        for item in workspace_links:
-            st.markdown(f"""
-            <a href="{item['url']}" target="_blank" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 6px 8px; border-radius: 6px;">
-                <img src="{item['icon']}" width="20" height="20" style="object-fit: contain;"/>
-                <span style="font-size: 0.9rem; font-weight: 500;">{item['name']}</span>
-            </a>
-            """, unsafe_allow_html=True)
-
-        st.divider()
-        if st.button("Log out", use_container_width=True):
-            st.session_state.auth_user = None
-            st.logout()
-
-    return is_admin, user_email, user_name
 
 # --- EXECUTE AUTHENTICATION ---
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
@@ -578,45 +417,55 @@ You MUST output strictly in valid JSON format matching this exact structure:
 }"""
 
 def run_gemini_structured(client, model_name, user_prompt, file_bytes, mime_type):
-    """Runs Gemini Vision/Text with forced JSON output."""
+    """Executes Gemini API safely across main or background threads."""
+    if not client:
+        return {}
     try:
-        # Prepare the file binary part
-        document_part = types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        # Prepare content payload
+        contents = [
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+                    types.Part.from_text(text=user_prompt)
+                ]
+            )
+        ]
         
         response = client.models.generate_content(
             model=model_name,
-            contents=[user_prompt, document_part],
+            contents=contents,
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json"
+                response_mime_type="application/json",
+                response_schema=GradingOutput
             )
         )
-        
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
+        return json.loads(response.text)
+
     except Exception as e:
-        st.error(f"⚠️ Gemini Error ({model_name}): {str(e)}")
+        # REPLACE st.error() WITH LOGGING / PRINT
+        # This prevents Streamlit thread context crashes
+        print(f"[Gemini Worker Error] {model_name}: {str(e)}")
         return {}
 
-def run_groq_structured(client, user_prompt, extracted_text, model_name="llama-3.1-8b-instant"):
-    """Runs Groq Llama/Mixtral with forced JSON output."""
+def run_groq_structured(client, user_prompt, text_content):
+    """Executes Groq API safely across main or background threads."""
+    if not client or not text_content:
+        return {}
     try:
-        combined_prompt = f"{user_prompt}\n\n<student_text>\n{extracted_text}\n</student_text>"
-
-        chat_completion = client.chat.completions.create(
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": combined_prompt}
+                {"role": "system", "content": "You are an expert academic evaluator. Return JSON matching the schema."},
+                {"role": "user", "content": f"{user_prompt}\n\n<student_submission>\n{text_content}\n</student_submission>"}
             ],
-            model=model_name,
             response_format={"type": "json_object"}
         )
-        
-        raw_content = chat_completion.choices[0].message.content
-        clean_text = raw_content.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_text)
+        return json.loads(completion.choices[0].message.content)
+
     except Exception as e:
-        st.error(f"⚠️ Groq Error ({model_name}): {str(e)}")
+        # REPLACE st.error() WITH LOGGING / PRINT
+        print(f"[Groq Worker Error]: {str(e)}")
         return {}
 
 # --- HEADER & STEPPER ---
@@ -1017,16 +866,21 @@ with wizard_tab3:
                         st.success("Grade updated!")
                         st.rerun()
 
-                # Category score chips
-                p_res = item["res_primary"]
-                st.markdown(f"""
-                <div class="chip-container">
-                    <span class="chip">🎯 Task Achievement: {p_res.get('score_task_achievement', 'N/A')}</span>
-                    <span class="chip">🧩 Organization: {p_res.get('score_organization', 'N/A')}</span>
-                    <span class="chip">✍️ Accuracy: {p_res.get('score_accuracy', 'N/A')}</span>
-                    <span class="chip">📏 Words: {item['word_count']}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                # Category score chips (Tab 3)
+p_res = item["res_primary"]
+task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
+org = html.escape(str(p_res.get('score_organization', 'N/A')))
+acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
+words = html.escape(str(item.get('word_count', 'N/A')))
+
+st.markdown(f"""
+<div class="chip-container">
+    <span class="chip">🎯 Task Achievement: {task_ach}</span>
+    <span class="chip">🧩 Organization: {org}</span>
+    <span class="chip">✍️ Accuracy: {acc}</span>
+    <span class="chip">📏 Words: {words}</span>
+</div>
+""", unsafe_allow_html=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 col_canvas, col_details = st.columns([1, 1])
