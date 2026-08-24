@@ -17,7 +17,8 @@ from io import BytesIO
 from pydantic import BaseModel
 import plotly.express as px
 import google.generativeai as genai
-from supabase import create_client
+from supabase import create_client, Client
+from PyPDF2 import PdfReader
 
 # --- FREE API INTEGRATIONS ---
 from google import genai
@@ -27,6 +28,44 @@ import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+
+# 1. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
+supabase = None
+
+try:
+    supabase_url = st.secrets.get("SUPABASE_URL")
+    supabase_key = st.secrets.get("SUPABASE_KEY")
+    if supabase_url and supabase_key:
+        supabase: Client = create_client(supabase_url, supabase_key)
+    else:
+        st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
+except Exception as e:
+    st.sidebar.error(f"⚠️ Could not connect to Supabase: {e}")
+
+# 2. DEFINE HELPER FUNCTIONS NEXT
+def log_user_session():
+    """Logs user access immediately upon page visit."""
+    # Now safe to check because supabase is guaranteed to exist
+    if not supabase:
+        return 
+        
+    if st.session_state.get("session_logged"):
+        return 
+
+    user_email = st.session_state.get("user_email", "teacher@istek.k12.tr")
+
+    try:
+        supabase.table("user_logs").insert({
+            "user_email": user_email,
+            "action": "User Access",
+            "details": "Opened app session"
+        }).execute()
+        st.session_state["session_logged"] = True
+    except Exception as e:
+        print(f"Error logging session: {e}")
+
+# 3. CALL LOG_USER_SESSION AFTER SUPABASE IS INITIALIZED
+log_user_session()
 
 # 2. HELPER FUNCTIONS
 
