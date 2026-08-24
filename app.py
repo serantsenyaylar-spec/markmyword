@@ -76,8 +76,8 @@ except Exception:
     supabase = None
     st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
 
-def save_teacher_exemplar(student_id, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
-    """Saves complete evaluation data to Supabase for RAG training and student portfolios."""
+def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
+    """Saves evaluation records to Supabase vector memory using Student Full Name."""
     try:
         gemini_key = get_secret("GEMINI_API_KEY")
         embedding = []
@@ -87,7 +87,7 @@ def save_teacher_exemplar(student_id, student_text, rubric_type, ai_score, teach
             embedding = emb_res.embedding.values
 
         supabase.table("essay_memory").insert({
-            "student_id": str(student_id),
+            "student_name": str(student_name),
             "essay_text": student_text,
             "rubric_type": rubric_type,
             "ai_score": float(ai_score),
@@ -729,53 +729,55 @@ with wizard_tab1:
         st.session_state.raw_rubric = scaled_rubric_df.to_string()
         
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
-with wizard_tab2: # Or whichever tab you want this in!
-    
+with wizard_tab2:
     st.markdown("### 📥 Upload & Review Batch")
     
-    # 1. THE UPLOAD ZONE
     uploaded_files = st.file_uploader(
-        "Drag and drop multiple student essays here (PDF, DOCX, TXT)", 
-        type=["pdf", "docx", "txt"], 
+        "Drag and drop student essays (PDF, DOCX, TXT, or Images)", 
+        type=["pdf", "docx", "txt", "png", "jpg", "jpeg"], 
         accept_multiple_files=True
     )
 
     if uploaded_files:
-        # If there are files, extract them and save to session_state
         if "graded_batch" not in st.session_state or len(st.session_state.graded_batch) != len(uploaded_files):
             st.session_state.graded_batch = []
-            with st.spinner("Extracting text and generating AI drafts..."):
+            with st.spinner("Extracting text and preparing batch..."):
                 for f in uploaded_files:
-                    content = extract_text_from_file(f)
-                    if content:
-                        # Right now we are hardcoding a fake AI score of 0 so you can test the UI.
-                        # Later, this is where we will call Gemini/OpenAI!
-                        st.session_state.graded_batch.append({
-                            "filename": f.name, 
-                            "text": content, 
-                            "score": 0, 
-                            "feedback": "AI draft feedback will go here..."
-                        })
+                    content = extract_text_from_file(f) or ""
+                    
+                    # Smart auto-fill: Try guessing the name from the filename (e.g., "Ali_Yilmaz_Essay.pdf" -> "Ali Yilmaz")
+                    clean_filename = f.name.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ')
+                    # Remove common extra words if present
+                    suggested_name = ' '.join([w for w in clean_filename.split() if w.lower() not in ['essay', 'writing', 'paper', 'b1', 'task']]).title()
+                    
+                    st.session_state.graded_batch.append({
+                        "filename": f.name,
+                        "student_name": suggested_name if suggested_name else "Student Name",
+                        "text": content,
+                        "file_bytes": f.getvalue(),
+                        "mime_type": mimetypes.guess_type(f.name)[0] or "text/plain",
+                        "score": 0,
+                        "feedback": "AI evaluation draft will be generated during processing..."
+                    })
             st.success(f"✅ Loaded {len(st.session_state.graded_batch)} essays!")
 
-    # 2. THE REVIEW INTERFACE
     if "graded_batch" in st.session_state and len(st.session_state.graded_batch) > 0:
         st.markdown("---")
-        st.markdown("### 📝 Review & Edit Grades")
+        st.markdown("### 📝 Assign Names & Review Papers")
         
         for i, paper in enumerate(st.session_state.graded_batch):
-            with st.expander(f"📄 Review: {paper['filename']}", expanded=(i==0)):
-                st.markdown("**Student Text:**")
-                st.info(paper['text'][:500] + "... [Text truncated]") # Shows a preview of the essay
+            with st.expander(f"📄 Paper #{i+1}: {paper['student_name']} ({paper['filename']})", expanded=(i==0)):
                 
-                st.session_state.graded_batch[i]['score'] = st.number_input(
-                    "Final Score", value=paper['score'], key=f"score_{i}"
+                # Student Name & Surname Input Field
+                st.session_state.graded_batch[i]['student_name'] = st.text_input(
+                    "👤 Student Name & Surname:", 
+                    value=paper['student_name'], 
+                    key=f"name_{i}"
                 )
                 
-                st.session_state.graded_batch[i]['feedback'] = st.text_area(
-                    "Final Feedback", value=paper['feedback'], key=f"feed_{i}", height=100
-                )
-
+                st.markdown("**Student Text Preview:**")
+                st.info(paper['text'][:400] + "..." if len(paper['text']) > 400 else paper['text'])
+                
         # 3. THE FINALIZE BUTTON
         st.markdown("---")
         if st.button("💾 Finalize Batch & Train AI", type="primary", use_container_width=True):
@@ -794,35 +796,42 @@ with wizard_tab2: # Or whichever tab you want this in!
 with wizard_tab3:
     t3_sub1, t3_sub2 = st.tabs(["📝 Batch Review & Grading", "📂 Student Portfolio Lookup"])
     
-    # --- FEATURE: STUDENT PORTFOLIO LOOKUP ---
-    with t3_sub2:
-        st.markdown("### 🔍 Student Progress Portfolio")
-        st.write("Pull historical data for parent-teacher meetings or end-of-term reviews.")
-        
-        search_id = st.text_input("Enter Student ID to Search:", placeholder="e.g., 2026105")
-        if st.button("Search Portfolio", type="primary", key="search_portfolio"):
-            if not supabase:
-                st.error("Database connection required.")
-            else:
-                try:
-                    res = supabase.table("essay_memory").select("created_at, rubric_type, ai_score, score, teacher_feedback").eq("student_id", search_id).order("created_at", desc=True).execute()
+   # --- FEATURE: STUDENT PORTFOLIO LOOKUP BY NAME ---
+with t3_sub2:
+    st.markdown("### 🔍 Student Progress Portfolio")
+    st.write("Search historical records by student first name or surname for parent-teacher meetings.")
+    
+    search_query = st.text_input("Enter Student First Name or Surname:", placeholder="e.g., Ali Yılmaz or Yılmaz")
+    
+    if st.button("Search Portfolio", type="primary", key="search_portfolio_btn"):
+        if not search_query.strip():
+            st.warning("Please enter a name to search.")
+        elif not supabase:
+            st.error("Database connection required.")
+        else:
+            try:
+                # Uses Supabase 'ilike' for case-insensitive partial match
+                res = supabase.table("essay_memory").select("created_at, student_name, rubric_type, ai_score, score, teacher_feedback") \
+                    .ilike("student_name", f"%{search_query.strip()}%") \
+                    .order("created_at", desc=True).execute()
+                
+                if res.data:
+                    df_port = pd.DataFrame(res.data)
+                    df_port["created_at"] = pd.to_datetime(df_port["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y")
                     
-                    if res.data:
-                        df_port = pd.DataFrame(res.data)
-                        df_port["created_at"] = pd.to_datetime(df_port["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y")
-                        
-                        st.success(f"✅ Found {len(df_port)} assignments for Student **{search_id}**")
-                        
-                        # Show a quick trend graph
-                        fig = px.line(df_port[::-1], x="created_at", y="score", markers=True, title="Grade Progression Over Time", labels={"created_at": "Date", "score": "Final Grade"})
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Show historical feedback
-                        st.dataframe(df_port[["created_at", "rubric_type", "score", "teacher_feedback"]], use_container_width=True)
-                    else:
-                        st.warning(f"No records found for Student ID: {search_id}")
-                except Exception as e:
-                    st.error(f"Error searching portfolio: {e}")
+                    st.success(f"✅ Found {len(df_port)} past evaluation(s) matching '**{search_query}**'")
+                    
+                    # Progress Chart
+                    fig = px.line(df_port[::-1], x="created_at", y="score", color="student_name", markers=True, 
+                                  title="Student Grade Progression Over Time", labels={"created_at": "Date", "score": "Grade"})
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # History Table
+                    st.dataframe(df_port[["created_at", "student_name", "rubric_type", "score", "teacher_feedback"]], use_container_width=True, hide_index=True)
+                else:
+                    st.warning(f"No records found matching: '**{search_query}**'")
+            except Exception as e:
+                st.error(f"Error searching portfolio: {e}")
 
     # --- BATCH REVIEW (SLIDERS & REWRITE) ---
     with t3_sub1:
