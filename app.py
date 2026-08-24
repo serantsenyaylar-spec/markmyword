@@ -1088,139 +1088,150 @@ with t3_sub2:
 # --- TAB 4: ADMIN PANEL (VISIBLE ONLY TO ADMINS) ---
 
 if IS_ADMIN and admin_tab:
- with admin_tab:
-    st.markdown("### 🛡️ Admin Dashboard")
-    
-    # Created sub-tabs (indented 4 spaces)
-    admin_sub1, admin_sub2, admin_sub3 = st.tabs(["📊 Activity Logs", "📝 Exemplars", "⚙️ Settings"])
-    
-    # --- PASTE HERE: LIVE WEBSITE LOGIN NOTIFICATIONS ---
-    try:
-        logs_res = supabase.table("user_logs").select("*").order("created_at", desc=True).limit(20).execute()
-        logs_data = logs_res.data or []
-    except Exception as e:
+    with admin_tab:
+        st.markdown("### 🛡️ Admin Dashboard")
+        
+        # 1. SAFELY FETCH ESSAY DATA FOR INSIGHTS & EXPORTS
+        essay_data = []
+        if supabase:
+            try:
+                res = supabase.table("essay_memory").select("*").execute()
+                essay_data = res.data or []
+            except Exception as e:
+                st.error(f"Error fetching essay memory: {e}")
+                
+        # 2. SAFELY FETCH USER LOGS FOR ACCESS FEED
         logs_data = []
+        if supabase:
+            try:
+                logs_res = supabase.table("user_logs").select("*").order("created_at", desc=True).limit(20).execute()
+                logs_data = logs_res.data or []
+            except Exception as e:
+                logs_data = []
 
-    # Toast alert for new logins
-    if logs_data:
-        latest_log = logs_data[0]
-        if st.session_state.get("last_seen_log_id") != latest_log["id"]:
-            st.toast(f"🚨 **Live Access Alert:** {latest_log['user_email']} just opened the app!", icon="👤")
-            st.session_state.last_seen_log_id = latest_log["id"]
+        # Toast alert for new logins
+        if logs_data:
+            latest_log = logs_data[0]
+            if st.session_state.get("last_seen_log_id") != latest_log.get("id"):
+                st.toast(f"🚨 **Live Access Alert:** {latest_log.get('user_email', 'User')} just opened the app!", icon="👤")
+                st.session_state.last_seen_log_id = latest_log.get("id")
 
-    st.markdown("#### 🔔 Real-Time User Activity Feed")
-    if logs_data:
-        df_logs = pd.DataFrame(logs_data)
-        df_logs["created_at"] = pd.to_datetime(df_logs["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
-        st.dataframe(df_logs[["created_at", "user_email", "action", "details"]], use_container_width=True, hide_index=True)
-    else:
-        st.info("No active user logins recorded yet.")
-        
-    st.divider()
+        # 3. DEFINE SUB-TABS
+        admin_sub1, admin_sub2, admin_sub3 = st.tabs(["📊 Insights", "📝 Exemplars & Audit", "⚙️ System & Logs"])
 
-    # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
-with admin_sub1:
-        st.markdown("#### Real-Time User Activity")
-        if essay_data:
-            df_insights = pd.DataFrame(essay_data)
-            
-            # Ensure numeric types for score comparison
-            if "ai_score" in df_insights.columns and "score" in df_insights.columns:
-                df_insights["ai_score"] = pd.to_numeric(df_insights["ai_score"], errors="coerce").fillna(0)
-                df_insights["score"] = pd.to_numeric(df_insights["score"], errors="coerce").fillna(0)
-                df_insights["Variance"] = df_insights["score"] - df_insights["ai_score"]
+        # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
+        with admin_sub1:
+            st.markdown("#### Real-Time Pedagogical Analytics")
+            if essay_data:
+                df_insights = pd.DataFrame(essay_data)
                 
-                # Flag significant teacher overrides (±10 points)
-                high_variance = df_insights[df_insights["Variance"].abs() >= 10]
+                # Ensure numeric types for score comparison
+                if "ai_score" in df_insights.columns and "score" in df_insights.columns:
+                    df_insights["ai_score"] = pd.to_numeric(df_insights["ai_score"], errors="coerce").fillna(0)
+                    df_insights["score"] = pd.to_numeric(df_insights["score"], errors="coerce").fillna(0)
+                    df_insights["Variance"] = df_insights["score"] - df_insights["ai_score"]
+                    
+                    # Flag significant teacher overrides (±10 points)
+                    high_variance = df_insights[df_insights["Variance"].abs() >= 10]
+                    
+                    col_i1, col_i2 = st.columns(2)
+                    with col_i1:
+                        avg_diff = round(df_insights["Variance"].mean(), 2)
+                        st.metric("Avg Teacher Adjustment", f"{avg_diff:+g} pts", help="Positive means teachers grade higher than AI")
+                    with col_i2:
+                        st.metric("High Override Rate (≥10 pts)", f"{len(high_variance)} / {len(df_insights)}")
+
+                    if not high_variance.empty:
+                        st.warning("⚠️ **Significant Score Overrides (±10+ Points):**")
+                        st.dataframe(
+                            high_variance[["teacher_email", "rubric_type", "ai_score", "score", "Variance", "teacher_feedback"]],
+                            use_container_width=True, hide_index=True
+                        )
+                    else:
+                        st.success("✅ AI scoring alignment is strong. No major score overrides detected.")
                 
-                col_i1, col_i2 = st.columns(2)
-                with col_i1:
-                    avg_diff = round(df_insights["Variance"].mean(), 2)
-                    st.metric("Avg Teacher Adjustment", f"{avg_diff:+g} pts", help="Positive means teachers grade higher than AI")
-                with col_i2:
-                    st.metric("High Override Rate (≥10 pts)", f"{len(high_variance)} / {len(df_insights)}")
-
-                if not high_variance.empty:
-                    st.warning("⚠️ **Significant Score Overrides (±10+ Points):**")
-                    st.dataframe(
-                        high_variance[["teacher_email", "rubric_type", "ai_score", "score", "Variance", "teacher_feedback"]],
-                        use_container_width=True, hide_index=True
-                    )
-                else:
-                    st.success("✅ AI scoring alignment is strong. No major score overrides detected.")
-            
-            st.divider()
-            st.markdown("#### 🔍 Common Error & Red-Pen Trends")
-            if "red_pen_corrections" in df_insights.columns:
-                all_corrections = " ".join(df_insights["red_pen_corrections"].dropna().tolist())
-                if all_corrections.strip():
-                    st.text_area("Recent Red-Pen Corrections Summary", value=all_corrections[:1500], height=120, disabled=True)
-                else:
-                    st.info("No red-pen correction logs available yet.")
-        else:
-            st.info("No evaluated essay memory records found to analyze.")
-
-    # --- SUB-TAB 2: ESSAY HISTORY & AUDIT EXPORT ---
-with admin_sub2:
-        st.markdown("#### Saved Exemplars")
-        if essay_data:
-            df_audit = pd.DataFrame(essay_data)
-            
-            # Timestamp formatting to local time
-            if "created_at" in df_audit.columns:
-                df_audit["created_at"] = pd.to_datetime(df_audit["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M")
-            
-            # Reorder columns cleanly
-            display_cols = [c for c in ["created_at", "teacher_email", "rubric_type", "ai_score", "score", "teacher_feedback", "essay_text"] if c in df_audit.columns]
-            st.dataframe(df_audit[display_cols], use_container_width=True, hide_index=True)
-
-            st.divider()
-            st.markdown("#### 📦 One-Click Database Export")
-            
-            # Export CSV Button
-            csv_export = df_audit.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="📥 Export Full Database (CSV)",
-                data=csv_export,
-                file_name=f"ISTEK_Grading_Memory_Audit_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                type="primary",
-                use_container_width=True
-            )
-        else:
-            st.info("No audit records stored in database.")
-
-    # --- SUB-TAB 3: OPERATIONAL & QUOTA CONTROL ---
-with admin_sub3:
-        st.markdown("#### System Settings")
-        col_op1, col_op2 = st.columns(2)
-        
-        with col_op1:
-            st.markdown("**Teacher Quota Monitor**")
-            current_count = st.session_state.get("graded_count", 0)
-            quota_pct = min(current_count / MAX_PAPERS_PER_SESSION, 1.0)
-            
-            st.write(f"Active Session Usage: **{current_count} / {MAX_PAPERS_PER_SESSION} papers**")
-            st.progress(quota_pct)
-            
-            if st.button("Reset Current Session Count", key="admin_reset_quota"):
-                st.session_state.graded_count = 0
-                st.success("Session counter reset to 0.")
-                st.rerun()
-
-        with col_op2:
-            st.markdown("**Database & API Status**")
-            if supabase:
-                st.success("🟢 Supabase Vector DB: Connected")
+                st.divider()
+                st.markdown("#### 🔍 Common Error & Red-Pen Trends")
+                if "red_pen_corrections" in df_insights.columns:
+                    all_corrections = " ".join(df_insights["red_pen_corrections"].dropna().tolist())
+                    if all_corrections.strip():
+                        st.text_area("Recent Red-Pen Corrections Summary", value=all_corrections[:1500], height=120, disabled=True)
+                    else:
+                        st.info("No red-pen correction logs available yet.")
             else:
-                st.error("🔴 Supabase Vector DB: Disconnected")
+                st.info("No evaluated essay memory records found to analyze.")
 
-            gemini_check = get_secret("GEMINI_API_KEY")
-            groq_check = get_secret("GROQ_API_KEY")
+        # --- SUB-TAB 2: ESSAY HISTORY & AUDIT EXPORT ---
+        with admin_sub2:
+            st.markdown("#### Saved Exemplars")
+            if essay_data:
+                df_audit = pd.DataFrame(essay_data)
+                
+                # Timestamp formatting to local time
+                if "created_at" in df_audit.columns:
+                    df_audit["created_at"] = pd.to_datetime(df_audit["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M")
+                
+                # Reorder columns cleanly
+                display_cols = [c for c in ["created_at", "teacher_email", "rubric_type", "ai_score", "score", "teacher_feedback", "essay_text"] if c in df_audit.columns]
+                st.dataframe(df_audit[display_cols], use_container_width=True, hide_index=True)
+
+                st.divider()
+                st.markdown("#### 📦 One-Click Database Export")
+                
+                # Export CSV Button safely importing datetime
+                import datetime
+                csv_export = df_audit.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="📥 Export Full Database (CSV)",
+                    data=csv_export,
+                    file_name=f"ISTEK_Grading_Memory_Audit_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                    use_container_width=True
+                )
+            else:
+                st.info("No audit records stored in database.")
+
+        # --- SUB-TAB 3: OPERATIONAL & QUOTA CONTROL ---
+        with admin_sub3:
+            st.markdown("#### Real-Time User Activity Feed")
+            if logs_data:
+                df_logs = pd.DataFrame(logs_data)
+                df_logs["created_at"] = pd.to_datetime(df_logs["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
+                st.dataframe(df_logs[["created_at", "user_email", "action", "details"]], use_container_width=True, hide_index=True)
+            else:
+                st.info("No active user logins recorded yet.")
+
+            st.divider()
+            st.markdown("#### System Settings & Quotas")
+            col_op1, col_op2 = st.columns(2)
             
-            st.write(f"• Gemini Engine: {'🟢 Online' if gemini_check else '🔴 Key Missing'}")
-            st.write(f"• Groq Llama Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
-            
+            with col_op1:
+                st.markdown("**Teacher Quota Monitor**")
+                current_count = st.session_state.get("graded_count", 0)
+                max_papers = globals().get("MAX_PAPERS_PER_SESSION", 20)
+                quota_pct = min(current_count / max_papers, 1.0)
+                
+                st.write(f"Active Session Usage: **{current_count} / {max_papers} papers**")
+                st.progress(quota_pct)
+                
+                if st.button("Reset Current Session Count", key="admin_reset_quota"):
+                    st.session_state.graded_count = 0
+                    st.success("Session counter reset to 0.")
+                    st.rerun()
+
+            with col_op2:
+                st.markdown("**Database & API Status**")
+                if supabase:
+                    st.success("🟢 Supabase Vector DB: Connected")
+                else:
+                    st.error("🔴 Supabase Vector DB: Disconnected")
+
+                gemini_check = st.secrets.get("GEMINI_API_KEY")
+                groq_check = st.secrets.get("GROQ_API_KEY")
+                
+                st.write(f"• Gemini Engine: {'🟢 Online' if gemini_check else '🔴 Key Missing'}")
+                st.write(f"• Groq Llama Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
             
 # --- FOOTER ---
 st.markdown("""
