@@ -246,7 +246,7 @@ def check_authentication():
 
     return is_admin, user_email, user_name
 
-def log_user_login(user_name, user_email):
+def track_user_login() log_user_login(user_name, user_email):
     """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
     try:
         creds = get_google_credentials()
