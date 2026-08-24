@@ -1,1 +1,3 @@
-
+git add supabase/migrations/.gitkeep
+git commit -m "fix: add empty supabase migrations directory"
+git push origin main
