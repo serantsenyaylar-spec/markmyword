@@ -19,6 +19,7 @@ import plotly.express as px
 import google.generativeai as genai
 from supabase import create_client, Client
 from PyPDF2 import PdfReader
+import requests
 
 # --- FREE API INTEGRATIONS ---
 from google import genai
@@ -33,22 +34,39 @@ from googleapiclient.http import MediaIoBaseUpload
 supabase = None
 
 def log_user_login(user_name, user_email):
-    """Logs user name and email access immediately upon page visit."""
-    if not supabase:
-        return
-        
+    """Logs user access to Supabase and sends an instant push notification to your phone."""
     if st.session_state.get("session_logged"):
-        return  # Prevents duplicate entries per session
+        return  # Prevents duplicate notifications per session
 
+    # 1. Log to Supabase Database
+    if supabase:
+        try:
+            supabase.table("user_logs").insert({
+                "user_email": user_email,
+                "action": "User Access",
+                "details": f"Logged in as {user_name}"
+            }).execute()
+        except Exception as e:
+            print(f"Database logging error: {e}")
+
+    # 2. Send Instant Mobile Notification (ntfy.sh)
+    NTFY_TOPIC = "istek_grader_alerts_99"  # Replace with your exact topic name from Step 1
     try:
-        supabase.table("user_logs").insert({
-            "user_email": user_email,
-            "action": "User Access",
-            "details": f"Logged in as {user_name}"
-        }).execute()
-        st.session_state["session_logged"] = True
+        requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=f"User: {user_email}\nName: {user_name}",
+            headers={
+                "Title": "🚨 App Access Alert",
+                "Priority": "high",
+                "Tags": "door,bell"
+            },
+            timeout=5
+        )
     except Exception as e:
-        print(f"Error logging session: {e}")
+        print(f"Push notification error: {e}")
+
+    # Mark session logged
+    st.session_state["session_logged"] = True
         
 try:
     supabase_url = st.secrets.get("SUPABASE_URL")
