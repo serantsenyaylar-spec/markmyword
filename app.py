@@ -250,9 +250,6 @@ for key, val in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-# --- EXECUTE AUTHENTICATION ---
-IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
-
 # --- LOG USER LOGIN (ONCE PER SESSION) ---
 if not st.session_state.get("user_session_logged", False):
     st.session_state.user_session_logged = True
