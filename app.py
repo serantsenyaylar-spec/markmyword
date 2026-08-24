@@ -16,6 +16,8 @@ import concurrent.futures
 from io import BytesIO
 from pydantic import BaseModel
 import plotly.express as px
+import openai
+from supabase import create_client
 
 # --- FREE API INTEGRATIONS ---
 from google import genai
@@ -43,10 +45,30 @@ def extract_text_from_file(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
 
-# --- MOCK SAVE FUNCTION (Temporary until Supabase is ready) ---
+# Initialize Supabase client
+supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+
 def save_teacher_exemplar(student_text, rubric_type, teacher_score, teacher_feedback):
-    time.sleep(0.5) # Pretends to save
-    pass
+    """Converts student text to a vector embedding and saves the teacher's grade to Supabase."""
+    try:
+        # 1. Embed the essay using OpenAI (or Gemini embedding API)
+        emb_res = openai.embeddings.create(
+            input=student_text,
+            model="text-embedding-3-small"
+        )
+        embedding = emb_res.data[0].embedding
+
+        # 2. Save directly into Supabase database
+        supabase.table("essay_memory").insert({
+            "essay_text": student_text,
+            "rubric_type": rubric_type,
+            "score": int(teacher_score),
+            "teacher_feedback": teacher_feedback,
+            "embedding": embedding
+        }).execute()
+
+    except Exception as e:
+        st.error(f"Could not save exemplar to memory: {e}")
     
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
