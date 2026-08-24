@@ -571,11 +571,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- WIZARD TABS ---
-wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
-    "⚙️ Step 1: Setup", 
-    "📤 Step 2: Upload & Process", 
-    "📊 Step 3: Class Analytics & Reports"
-])
+if IS_ADMIN:
+    tabs = st.tabs([
+        "⚙️ Step 1: Setup", 
+        "📤 Step 2: Upload & Process", 
+        "📊 Step 3: Class Analytics & Reports",
+        "🔐 Admin: System Logs"
+    ])
+    wizard_tab1, wizard_tab2, wizard_tab3, admin_tab = tabs[0], tabs[1], tabs[2], tabs[3]
+else:
+    tabs = st.tabs([
+        "⚙️ Step 1: Setup", 
+        "📤 Step 2: Upload & Process", 
+        "📊 Step 3: Class Analytics & Reports"
+    ])
+    wizard_tab1, wizard_tab2, wizard_tab3 = tabs[0], tabs[1], tabs[2]
+    admin_tab = None
 
 # --- TAB 1: SETUP ---
 with wizard_tab1:
@@ -857,33 +868,54 @@ with wizard_tab3:
                     st.markdown(f"**Detailed Feedback:**\n{p_res.get('feedback', 'N/A')}")
                     st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain")
 
-# --- ADMIN CONTROL PANEL ---
-        if IS_ADMIN:
-            st.divider()
-            st.markdown("### 🔐 Admin Control Panel")
+# --- TAB 4: ADMIN PANEL (VISIBLE ONLY TO ADMINS) ---
+if IS_ADMIN and admin_tab:
+    with admin_tab:
+        st.markdown("### 🔐 System Access & Login Logs")
+        
+        # Add a manual refresh button
+        if st.button("🔄 Refresh Data", key="refresh_logs"):
+            st.rerun()
             
-            with st.expander("👀 View Recent Teacher Logins", expanded=False):
-                if st.button("🔄 Refresh Login Logs"):
-                    try:
-                        creds = get_google_credentials()
-                        if creds:
-                            client = gspread.authorize(creds)
-                            sheet_id = get_secret("SHEET_ID")
-                            if sheet_id:
-                                sheet = client.open_by_key(sheet_id).worksheet("Logins")
-                            else:
-                                sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
-                            
-                            records = sheet.get_all_records()
-                            if records:
-                                df_logs = pd.DataFrame(records).iloc[::-1]
-                                st.dataframe(df_logs, use_container_width=True, hide_index=True)
-                            else:
-                                st.info("No logins recorded yet.")
-                        else:
-                            st.error("Missing Google Credentials.")
-                    except Exception as e:
-                        st.error(f"Could not load logs: {e}")
+        try:
+            # 1. Fetch logs securely from Supabase
+            res = supabase.table("user_logs").select("*").order("created_at", desc=True).execute()
+            
+            if res.data:
+                df_logs = pd.DataFrame(res.data)
+                
+                # 2. Convert standard UTC timestamps to Istanbul Local Time
+                df_logs["created_at"] = pd.to_datetime(df_logs["created_at"])
+                df_logs["Local Time"] = df_logs["created_at"].dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
+                
+                # 3. Calculate Quick Statistics
+                total_logins = len(df_logs)
+                unique_users = df_logs["email"].nunique()
+                most_active = df_logs["email"].mode()[0] if not df_logs.empty else "N/A"
+                
+                # 4. Render Metrics UI
+                st.markdown("#### 📈 Platform Usage Statistics")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total Logins All-Time", total_logins)
+                c2.metric("Unique Teachers Logged In", unique_users)
+                c3.metric("Most Active User", most_active)
+                
+                st.divider()
+                
+                # 5. Render Clean Data Table
+                st.markdown("#### 🕒 Detailed Login History")
+                
+                # Format dataframe for display
+                df_display = df_logs[["email", "Local Time"]].copy()
+                df_display.columns = ["Teacher Email", "Login Time (Local)"]
+                
+                # Show table without the index numbers
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+            else:
+                st.info("No login data found in the database yet.")
+                
+        except Exception as e:
+            st.error(f"Error fetching logs from Supabase: {e}")
 
 # --- FOOTER ---
 st.markdown("""
