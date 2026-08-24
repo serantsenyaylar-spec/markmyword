@@ -515,14 +515,14 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-- WIZARD TABS ---
+# --- WIZARD TABS ---
 wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
     "⚙️ Step 1: Setup", 
     "📤 Step 2: Upload & Process", 
     "📊 Step 3: Class Analytics & Reports"
 ])
 
--- TAB 1: SETUP ---
+# --- TAB 1: SETUP ---
 with wizard_tab1:
     
     st.components.v1.html(
