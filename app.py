@@ -28,7 +28,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- HELPER FUNCTIONS ---
+# 2. HELPER FUNCTIONS
+
 def extract_text_from_file(uploaded_file):
     """Extracts text from PDF, DOCX, or TXT files."""
     file_extension = uploaded_file.name.split('.')[-1].lower()
@@ -45,65 +46,60 @@ def extract_text_from_file(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
 
-# Safely fetch user email from session state (or set a fallback if not logged in yet)
-USER_EMAIL = st.session_state.get("user_email", "teacher@istek.k12.tr")
-
-# --- USER LOGIN DETECTION & TRACKING ---
-if USER_EMAIL:
-    log_user_session(USER_EMAIL)
-    
-    if "session_logged" not in st.session_state:
-        try:
-            supabase.table("user_logs").insert({
-                "user_email": user_email,
-                "action": "User Access",
-                "details": "Opened app session"
-            }).execute()
-            st.session_state.session_logged = True
-        except Exception as e:
-            print(f"Error logging session: {e}")
+def log_user_session():
+    """Logs user access automatically once per session by checking various session states."""
+    if not supabase:
+        return # Skip logging if DB isn't connected
+        
+    if st.session_state.get("session_logged"):
+        return # Already logged this session
+        
+    # Attempt to find the user email across common keys
+    user_email = None
+    for key in ["user_email", "email", "user", "username"]:
+        if key in st.session_state and st.session_state[key]:
+            val = st.session_state[key]
+            user_email = val.get("email") if isinstance(val, dict) else str(val)
+            break
             
-def log_user_login(user_name, user_email):
-    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
+    # Fallback if no email is found in session state
+    if not user_email:
+        user_email = "teacher@istek.k12.tr" 
+
     try:
-        creds = get_google_credentials()
-        if not creds:
-            return None
-
-        client = gspread.authorize(creds)
-        sheet_id = get_secret("SHEET_ID")
+        supabase.table("user_logs").insert({
+            "user_email": user_email,
+            "action": "User Access",
+            "details": "Opened app session"
+        }).execute()
         
-        if sheet_id:
-            sheet = client.open_by_key(sheet_id).worksheet("Logins")
-        else:
-            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
-            
-        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        sheet.append_row([timestamp, user_name, user_email])
-        
+        # Mark session as logged so we don't spam the database
+        st.session_state["session_logged"] = True
+        # Also store the active email for easy access later
+        st.session_state["user_email"] = user_email 
     except Exception as e:
-        print(f"Login Tracking Error: {e}")
-
-# Safe Supabase connection setup
-try:
-    supabase = create_client(
-        st.secrets["SUPABASE_URL"], 
-        st.secrets["SUPABASE_KEY"]
-    )
-except Exception:
-    supabase = None
-    st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
+        print(f"Error logging session: {e}")
 
 def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
     """Saves evaluation records to Supabase vector memory using Student Full Name."""
+    if not supabase:
+        st.error("Database connection missing. Cannot save exemplar.")
+        return
+
     try:
-        gemini_key = get_secret("GEMINI_API_KEY")
+        gemini_key = st.secrets.get("GEMINI_API_KEY")
         embedding = []
+        
+        # Generate embeddings if the API key is present
         if gemini_key:
             client = genai.Client(api_key=gemini_key)
-            emb_res = client.models.embed_content(model="text-embedding-004", contents=student_text)
-            embedding = emb_res.embedding.values
+            emb_res = client.models.embed_content(
+                model="text-embedding-004", 
+                contents=student_text
+            )
+            embedding = emb_res.embeddings[0].values # Adjusted based on typical GenAI SDK response
 
+        # Insert record into database
         supabase.table("essay_memory").insert({
             "student_name": str(student_name),
             "essay_text": student_text,
@@ -115,25 +111,18 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
             "teacher_email": teacher_email,
             "embedding": embedding
         }).execute()
+        st.success("Exemplar successfully saved to database!")
     except Exception as e:
         st.error(f"Could not save exemplar to database: {e}")
 
-def track_user_login():
-    # Automatically logs the user's visit/login once per session.
-    user_email = None
-    for key in ["user_email", "email", "user", "username"]:
-        if key in st.session_state and st.session_state[key]:
-            val = st.session_state[key]
-            user_email = val.get("email") if isinstance(val, dict) else str(val)
-            break
+# 3. APP EXECUTION
 
-    if user_email and not st.session_state.get("login_tracked_db"):
-        try:
-            supabase.table("user_logs").insert({"email": user_email}).execute()
-            st.session_state["login_tracked_db"] = True
-        except Exception:
-            pass
-            
+# Call the session logger immediately when the app loads
+log_user_session()
+
+# Safely fetch user email from session state for use in the rest of your app
+USER_EMAIL = st.session_state.get("user_email")
+
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
