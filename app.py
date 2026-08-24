@@ -8,6 +8,8 @@ import html
 import mimetypes
 import zipfile
 import io
+import docx2txt
+from pypdf import PdfReader
 import time
 import logging
 import concurrent.futures
@@ -24,6 +26,28 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+# --- HELPER FUNCTIONS ---
+def extract_text_from_file(uploaded_file):
+    """Extracts text from PDF, DOCX, or TXT files."""
+    file_extension = uploaded_file.name.split('.')[-1].lower()
+    try:
+        if file_extension == 'pdf':
+            reader = PdfReader(uploaded_file)
+            return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        elif file_extension == 'docx':
+            return docx2txt.process(uploaded_file)
+        elif file_extension == 'txt':
+            return uploaded_file.getvalue().decode("utf-8")
+        return None
+    except Exception as e:
+        st.error(f"Error reading {uploaded_file.name}: {e}")
+        return None
+
+# --- MOCK SAVE FUNCTION (Temporary until Supabase is ready) ---
+def save_teacher_exemplar(student_text, rubric_type, teacher_score, teacher_feedback):
+    time.sleep(0.5) # Pretends to save
+    pass
+    
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
@@ -719,114 +743,66 @@ with wizard_tab1:
         st.session_state.raw_rubric = scaled_rubric_df.to_string()
         
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
-with wizard_tab2:
-    st.markdown("#### 📤 Upload Student Submissions")
-    col_up1, col_up2 = st.columns([3, 1])
-    with col_up1:
-        uploaded_files = st.file_uploader(
-            "Upload Student Papers (PDF, Images, TXT)", 
-            type=["pdf", "png", "jpg", "jpeg", "webp", "txt"], 
-            accept_multiple_files=True
-        )
-    with col_up2:
-        if st.button("🧪 Load Sample Paper"):
-            st.session_state.demo_loaded = True
+with wizard_tab2: # Or whichever tab you want this in!
+    
+    st.markdown("### 📥 Upload & Review Batch")
+    
+    # 1. THE UPLOAD ZONE
+    uploaded_files = st.file_uploader(
+        "Drag and drop multiple student essays here (PDF, DOCX, TXT)", 
+        type=["pdf", "docx", "txt"], 
+        accept_multiple_files=True
+    )
 
-    active_files = []
     if uploaded_files:
-        st.session_state.demo_loaded = False
-        active_files = uploaded_files
-    elif st.session_state.demo_loaded:
-        sample_bytes = """Technology has completely changed how students communicate today. In the past, students called each other on landline phones or talked in person after class. Now, apps like WhatsApp and Google Classroom allow us to exchange study notes and work on group projects instantly.
+        # If there are files, extract them and save to session_state
+        if "graded_batch" not in st.session_state or len(st.session_state.graded_batch) != len(uploaded_files):
+            st.session_state.graded_batch = []
+            with st.spinner("Extracting text and generating AI drafts..."):
+                for f in uploaded_files:
+                    content = extract_text_from_file(f)
+                    if content:
+                        # Right now we are hardcoding a fake AI score of 0 so you can test the UI.
+                        # Later, this is where we will call Gemini/OpenAI!
+                        st.session_state.graded_batch.append({
+                            "filename": f.name, 
+                            "text": content, 
+                            "score": 0, 
+                            "feedback": "AI draft feedback will go here..."
+                        })
+            st.success(f"✅ Loaded {len(st.session_state.graded_batch)} essays!")
 
-For example, when our English teacher assigned a group presentation last week, we created a group chat immediately. We shared links, edited slides together, and solved questions late in the evening. However, social media can sometimes distract us during study sessions. Overall, modern technology makes academic collaboration faster and more convenient for everyone.""".encode("utf-8")
-        active_files = [type('UploadedDemoFile', (object,), {'name': "Sample_Student_9999.txt", 'getvalue': lambda self=None: sample_bytes})()]
-        st.info("🧪 Sample paper loaded!")
+    # 2. THE REVIEW INTERFACE
+    if "graded_batch" in st.session_state and len(st.session_state.graded_batch) > 0:
+        st.markdown("---")
+        st.markdown("### 📝 Review & Edit Grades")
+        
+        for i, paper in enumerate(st.session_state.graded_batch):
+            with st.expander(f"📄 Review: {paper['filename']}", expanded=(i==0)):
+                st.markdown("**Student Text:**")
+                st.info(paper['text'][:500] + "... [Text truncated]") # Shows a preview of the essay
+                
+                st.session_state.graded_batch[i]['score'] = st.number_input(
+                    "Final Score", value=paper['score'], key=f"score_{i}"
+                )
+                
+                st.session_state.graded_batch[i]['feedback'] = st.text_area(
+                    "Final Feedback", value=paper['feedback'], key=f"feed_{i}", height=100
+                )
 
-    if active_files:
-        st.dataframe(pd.DataFrame([{
-            "#": idx, 
-            "Student ID": os.path.splitext(f.name)[0], 
-            "File Name": f.name, 
-            "Size": f"{round(len(f.getvalue())/1024, 1)} KB"
-        } for idx, f in enumerate(active_files, 1)]), use_container_width=True)
-
-    if st.button("🚀 Evaluate Submissions", type="primary", use_container_width=True):
-        if not active_files:
-            st.error("Please upload at least one student paper.")
-            st.stop()
-
-        gemini_key, groq_key = get_secret("gemini_api_key"), get_secret("groq_api_key")
-        gemini_client = genai.Client(api_key=gemini_key) if gemini_key else None
-        groq_client = Groq(api_key=groq_key) if groq_key else None
-
-        user_prompt = f"""Assignment Type: {assignment_type}
-Total Rubric Scale: Out of {st.session_state.total_rubric_scale} points.
-<assignment_question>\n{st.session_state.active_question}\n</assignment_question>
-<rubric_data>\n{st.session_state.raw_rubric}\n</rubric_data>"""
-
-        st.session_state.graded_results = []
-        progress_bar = st.progress(0)
-        status_box = st.status("Initializing AI Multi-Model Consensus...", expanded=True)
-
-        for idx, file in enumerate(active_files):
-            student_id = os.path.splitext(file.name)[0]
-            file_bytes = file.getvalue()
-            mtype = mimetypes.guess_type(file.name)[0] or ("text/plain" if file.name.endswith(".txt") else "application/pdf")
-
-            status_box.write(f"📄 Processing **{file.name}** ({idx+1}/{len(active_files)})...")
-            upload_file_to_drive(file_bytes, file.name, DRIVE_FOLDER_ID, mtype)
-
-            res_gemini_primary = run_gemini_structured(gemini_client, "gemini-3.6-flash", user_prompt, file_bytes, mtype) if gemini_client else {}
-            extracted_text = file_bytes.decode("utf-8", errors="ignore") if mtype.startswith("text/") else res_gemini_primary.get("transcribed_text", "")
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                f_g25 = executor.submit(run_gemini_structured, gemini_client, "gemini-3.6-flash", user_prompt, file_bytes, mtype) if gemini_client else None
-                f_groq = executor.submit(run_groq_structured, groq_client, user_prompt, extracted_text) if groq_client else None
-
-                res_g25 = f_g25.result() if f_g25 else {}
-                res_groq = f_groq.result() if f_groq else {}
-
-            valid_results = [r for r in [res_gemini_primary, res_g25, res_groq] if check_validity(r)]
-            
-            if not valid_results:
-                status_box.write(f"❌ Failed to evaluate {file.name}")
-                continue
-
-            valid_scores = [r.get("total_score", 0) for r in valid_results]
-            final_score = round(sum(valid_scores) / len(valid_scores), 1)
-
-            primary_res = valid_results[0]
-            word_count = primary_res.get("word_count", "N/A")
-            transcribed_text = primary_res.get("transcribed_text", extracted_text)
-            corrections = primary_res.get("red_pen_corrections", "No major corrections reported.")
-
-            save_grade(USER_NAME, USER_EMAIL, student_id, assignment_type, final_score, word_count, st.session_state.total_rubric_scale)
-
-            report_text = f"İSTEK SCHOOLS GRADED REPORT\nStudent: {student_id}\nFinal Consensus Score: {final_score}/{st.session_state.total_rubric_scale}\n\nTranscribed Text:\n{transcribed_text}\n\nFeedback:\n{primary_res.get('feedback', '')}"
-            report_bytes = report_text.encode("utf-8")
-            report_fn = f"Report_{student_id}.txt"
-            upload_file_to_drive(report_bytes, report_fn, DRIVE_FOLDER_ID, "text/plain")
-
-            st.session_state.graded_results.append({
-                "student_id": student_id,
-                "file_bytes": file_bytes,
-                "mime_type": mtype,
-                "final_score": final_score,
-                "total_scale": st.session_state.total_rubric_scale,
-                "word_count": word_count,
-                "scores": [res_gemini_primary.get("total_score", "N/A"), res_g25.get("total_score", "N/A"), res_groq.get("total_score", "N/A")],
-                "res_primary": primary_res,
-                "corrections": corrections,
-                "report_bytes": report_bytes,
-                "report_fn": report_fn,
-                "question": st.session_state.active_question
-            })
-
-            progress_bar.progress((idx + 1) / len(active_files))
-
-        status_box.update(label="✅ Evaluation Complete!", state="complete", expanded=False)
-        st.session_state.graded_count += len(st.session_state.graded_results)
+        # 3. THE FINALIZE BUTTON
+        st.markdown("---")
+        if st.button("💾 Finalize Batch & Train AI", type="primary", use_container_width=True):
+            with st.spinner("Saving approved grades and upgrading AI memory..."):
+                for paper in st.session_state.graded_batch:
+                    save_teacher_exemplar(
+                        student_text=paper['text'],
+                        rubric_type="Standard Essay", 
+                        teacher_score=paper['score'],      
+                        teacher_feedback=paper['feedback'] 
+                    )
+            st.success("Batch finalized! The AI has securely learned from your corrections.")
+            st.balloons()
 
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
