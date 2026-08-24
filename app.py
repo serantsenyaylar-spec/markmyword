@@ -32,6 +32,24 @@ from googleapiclient.http import MediaIoBaseUpload
 # 1. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
 supabase = None
 
+def log_user_login(user_name, user_email):
+    """Logs user name and email access immediately upon page visit."""
+    if not supabase:
+        return
+        
+    if st.session_state.get("session_logged"):
+        return  # Prevents duplicate entries per session
+
+    try:
+        supabase.table("user_logs").insert({
+            "user_email": user_email,
+            "action": "User Access",
+            "details": f"Logged in as {user_name}"
+        }).execute()
+        st.session_state["session_logged"] = True
+    except Exception as e:
+        print(f"Error logging session: {e}")
+        
 try:
     supabase_url = st.secrets.get("SUPABASE_URL")
     supabase_key = st.secrets.get("SUPABASE_KEY")
@@ -337,6 +355,13 @@ def track_user_login():
             st.session_state["login_tracked_db"] = True
         except Exception:
             pass
+
+# Set fallback values if session state isn't populated yet
+USER_NAME = st.session_state.get("user_name", "Teacher")
+USER_EMAIL = st.session_state.get("user_email", "teacher@istek.k12.tr")
+
+# Line 346
+log_user_login(USER_NAME, USER_EMAIL)
 
 # --- EXECUTE AUTHENTICATION ---
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
