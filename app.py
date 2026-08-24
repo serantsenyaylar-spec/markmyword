@@ -589,7 +589,7 @@ with wizard_tab1:
     height=70,
 )
 
-    st.markdown("#### ⚡ Quick Assignment Presets")
+    st.components.v1.html
     
     default_essay_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
     default_para_question = "Write a 70-90 word paragraph describing your ideal morning routine before school starts. Explain why each activity helps your day."
