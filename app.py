@@ -45,10 +45,13 @@ def extract_text_from_file(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
 
+# Safely fetch user email from session state (or set a fallback if not logged in yet)
+USER_EMAIL = st.session_state.get("user_email", "teacher@istek.k12.tr")
+
 # --- USER LOGIN DETECTION & TRACKING ---
 if USER_EMAIL:
     log_user_session(USER_EMAIL)
-    """Logs user access immediately upon page visit."""
+    
     if "session_logged" not in st.session_state:
         try:
             supabase.table("user_logs").insert({
