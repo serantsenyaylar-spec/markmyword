@@ -76,21 +76,18 @@ except Exception:
     supabase = None
     st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
 
-def save_teacher_exemplar(student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
-    """Saves complete evaluation data to Supabase for RAG training and admin auditing."""
+def save_teacher_exemplar(student_id, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
+    """Saves complete evaluation data to Supabase for RAG training and student portfolios."""
     try:
-        # Generate embedding using Gemini (or OpenAI if configured)
         gemini_key = get_secret("GEMINI_API_KEY")
         embedding = []
         if gemini_key:
             client = genai.Client(api_key=gemini_key)
-            emb_res = client.models.embed_content(
-                model="text-embedding-004",
-                contents=student_text
-            )
+            emb_res = client.models.embed_content(model="text-embedding-004", contents=student_text)
             embedding = emb_res.embedding.values
 
         supabase.table("essay_memory").insert({
+            "student_id": str(student_id),
             "essay_text": student_text,
             "rubric_type": rubric_type,
             "ai_score": float(ai_score),
@@ -795,90 +792,120 @@ with wizard_tab2: # Or whichever tab you want this in!
 
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
-    if not st.session_state.graded_results:
-        st.info("📌 No evaluation results yet. Process papers in Step 2.")
-    else:
-        results = st.session_state.graded_results
+    t3_sub1, t3_sub2 = st.tabs(["📝 Batch Review & Grading", "📂 Student Portfolio Lookup"])
+    
+    # --- FEATURE: STUDENT PORTFOLIO LOOKUP ---
+    with t3_sub2:
+        st.markdown("### 🔍 Student Progress Portfolio")
+        st.write("Pull historical data for parent-teacher meetings or end-of-term reviews.")
         
-        # --- BATCH ANALYTICS ---
-        st.markdown("#### 📊 Batch Class Analytics")
-        a_col1, a_col2 = st.columns([2, 1])
-        with a_col1:
-            df_analytics = pd.DataFrame([{
-                "Student ID": r["student_id"],
-                "Final Score": r["final_score"],
-                "Word Count": r["word_count"] if isinstance(r["word_count"], (int, float)) else 0
-            } for r in results])
-            fig = px.bar(df_analytics, x="Student ID", y="Final Score", color="Final Score", title="Class Score Distribution", color_continuous_scale="RdYlGn")
-            st.plotly_chart(fig, use_container_width=True)
+        search_id = st.text_input("Enter Student ID to Search:", placeholder="e.g., 2026105")
+        if st.button("Search Portfolio", type="primary", key="search_portfolio"):
+            if not supabase:
+                st.error("Database connection required.")
+            else:
+                try:
+                    res = supabase.table("essay_memory").select("created_at, rubric_type, ai_score, score, teacher_feedback").eq("student_id", search_id).order("created_at", desc=True).execute()
+                    
+                    if res.data:
+                        df_port = pd.DataFrame(res.data)
+                        df_port["created_at"] = pd.to_datetime(df_port["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y")
+                        
+                        st.success(f"✅ Found {len(df_port)} assignments for Student **{search_id}**")
+                        
+                        # Show a quick trend graph
+                        fig = px.line(df_port[::-1], x="created_at", y="score", markers=True, title="Grade Progression Over Time", labels={"created_at": "Date", "score": "Final Grade"})
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show historical feedback
+                        st.dataframe(df_port[["created_at", "rubric_type", "score", "teacher_feedback"]], use_container_width=True)
+                    else:
+                        st.warning(f"No records found for Student ID: {search_id}")
+                except Exception as e:
+                    st.error(f"Error searching portfolio: {e}")
 
-        with a_col2:
-            avg_score = round(df_analytics["Final Score"].mean(), 1)
-            st.metric("Batch Class Average", f"{avg_score} / {results[0]['total_scale']}")
-            st.metric("Total Papers Graded", len(results))
+    # --- BATCH REVIEW (SLIDERS & REWRITE) ---
+    with t3_sub1:
+        if not st.session_state.graded_results:
+            st.info("📌 No evaluation results yet. Process papers in Step 2.")
+        else:
+            results = st.session_state.graded_results
+            
+            st.markdown("#### 📊 Batch Class Analytics")
+            df_analytics = pd.DataFrame([{"Student ID": r["student_id"], "Final Score": r["final_score"]} for r in results])
+            st.plotly_chart(px.bar(df_analytics, x="Student ID", y="Final Score", color="Final Score", title="Class Score Distribution"), use_container_width=True)
+            st.divider()
 
-        st.divider()
-
-        # Batch Zip Download
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for item in results: 
-                zf.writestr(item["report_fn"], item["report_bytes"])
-        st.download_button("📦 Download All Student Reports (ZIP)", zip_buffer.getvalue(), "Grading_Reports.zip", "application/zip", type="primary", use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Detailed Individual Card Views
-        for item in results:
-            scale_val = item["total_scale"]
-            with st.expander(f"📝 Student: {item['student_id']} | Final Score: {item['final_score']} / {scale_val}", expanded=True):
-                
-                # Teacher Action Toolbar
-                tc1, tc2, tc3 = st.columns([2, 2, 1])
-                with tc1:
-                    st.markdown(get_score_badge(item['final_score'], scale_val), unsafe_allow_html=True)
-                with tc2:
-                    override_score = st.number_input(f"Teacher Grade Override ({item['student_id']})", min_value=0.0, max_value=float(scale_val), value=float(item['final_score']), key=f"override_{item['student_id']}")
-                with tc3:
-                    if st.button("💾 Save Override", key=f"save_{item['student_id']}"):
-                        item['final_score'] = override_score
-                        st.success("Grade updated!")
+            for item in results:
+                scale_val = item["total_scale"]
+                with st.expander(f"📝 Student: {item['student_id']} | Current Score: {item['final_score']} / {scale_val}", expanded=False):
+                    
+                    p_res = item["res_primary"]
+                    
+                    # --- FEATURE: INTERACTIVE RUBRIC SLIDERS ---
+                    st.markdown("##### 🎚️ Fine-Tune AI Scores")
+                    col_s1, col_s2, col_s3 = st.columns(3)
+                    
+                    # Assuming default 35/35/30 max weights for the B1 rubric
+                    with col_s1:
+                        new_ta = st.slider("Task Achievement", 0.0, 35.0, float(p_res.get('score_task_achievement', 0)), 0.5, key=f"ta_{item['student_id']}")
+                    with col_s2:
+                        new_org = st.slider("Organization", 0.0, 35.0, float(p_res.get('score_organization', 0)), 0.5, key=f"org_{item['student_id']}")
+                    with col_s3:
+                        new_acc = st.slider("Accuracy", 0.0, 30.0, float(p_res.get('score_accuracy', 0)), 0.5, key=f"acc_{item['student_id']}")
+                    
+                    # Auto-calculate new total based on scale factor
+                    raw_total = new_ta + new_org + new_acc
+                    adjusted_total = round((raw_total / 100) * float(scale_val), 1)
+                    
+                    st.metric(f"Adjusted Total Grade", f"{adjusted_total} / {scale_val}")
+                    
+                    if st.button("💾 Lock Final Grade & Save to Database", key=f"save_{item['student_id']}"):
+                        item['final_score'] = adjusted_total
+                        # Save to Google Sheets
+                        save_grade(USER_NAME, USER_EMAIL, item["student_id"], st.session_state.preset_template, adjusted_total, item.get('word_count', 0), scale_val)
+                        # Save to Supabase Memory
+                        save_teacher_exemplar(
+                            student_id=item["student_id"],
+                            student_text=item["file_bytes"].decode("utf-8", errors="ignore") if not "image" in item["mime_type"] else "Image Upload",
+                            rubric_type=st.session_state.preset_template,
+                            ai_score=item['final_score'], # original AI score
+                            teacher_score=adjusted_total,
+                            teacher_feedback=p_res.get('feedback', ''),
+                            red_pen_corrections=item.get("corrections", ""),
+                            teacher_email=USER_EMAIL
+                        )
+                        st.success("✅ Grade locked and saved to Sheets & Memory!")
                         st.rerun()
 
-                # Category score chips
-                p_res = item["res_primary"]
-                task_ach = html.escape(str(p_res.get('score_task_achievement', 'N/A')))
-                org = html.escape(str(p_res.get('score_organization', 'N/A')))
-                acc = html.escape(str(p_res.get('score_accuracy', 'N/A')))
-                words = html.escape(str(item.get('word_count', 'N/A')))
-
-                st.markdown(f"""
-                <div class="chip-container">
-                    <span class="chip">🎯 Task Achievement: {task_ach}</span>
-                    <span class="chip">🧩 Organization: {org}</span>
-                    <span class="chip">✍️ Accuracy: {acc}</span>
-                    <span class="chip">📏 Words: {words}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_canvas, col_details = st.columns([1, 1])
-
-                with col_canvas:
-                    st.markdown("##### 📄 Document Canvas Preview")
-                    if "image" in item["mime_type"]:
-                        st.image(item["file_bytes"], use_container_width=True)
-                    elif item["mime_type"] == "application/pdf":
-                        b64_pdf = base64.b64encode(item["file_bytes"]).decode("utf-8")
-                        st.markdown(f'<object data="data:application/pdf;base64,{b64_pdf}" type="application/pdf" width="100%" height="400px"></object>', unsafe_allow_html=True)
-                    else:
-                        st.text_area("Plain Text Submission", value=item["file_bytes"].decode("utf-8", errors="ignore"), height=250)
-
-                with col_details:
-                    st.markdown("##### ✍️ Red-Pen Corrections & Feedback")
-                    st.warning(item["corrections"])
+                    # --- FEATURE: ONE-CLICK MODEL ANSWER REWRITE ---
+                    st.divider()
+                    st.markdown("##### ✨ Teaching Tools")
+                    if st.button("✍️ Generate CEFR B1+ Model Answer from this text", key=f"rewrite_{item['student_id']}"):
+                        with st.spinner("AI is crafting the perfect model answer..."):
+                            groq_client = Groq(api_key=get_secret("GROQ_API_KEY")) if get_secret("GROQ_API_KEY") else None
+                            if groq_client:
+                                try:
+                                    student_text = item["file_bytes"].decode("utf-8", errors="ignore")
+                                    completion = groq_client.chat.completions.create(
+                                        model="llama-3.3-70b-versatile",
+                                        messages=[
+                                            {"role": "system", "content": "You are a master English teacher. Rewrite the student's text into a perfect CEFR B1+ essay. Fix all grammar, improve vocabulary gracefully, and maintain their original ideas and structure."},
+                                            {"role": "user", "content": student_text}
+                                        ]
+                                    )
+                                    model_answer = completion.choices[0].message.content
+                                    st.success("**Perfected B1+ Model Answer:**")
+                                    st.write(model_answer)
+                                except Exception as e:
+                                    st.error(f"Failed to generate answer: {e}")
+                            else:
+                                st.error("Groq API key missing. Cannot generate answer.")
+                    
+                    st.divider()
+                    st.markdown("##### 📄 Original Submission & Feedback")
+                    st.warning(item.get("corrections", "No corrections found."))
                     st.markdown(f"**Detailed Feedback:**\n{p_res.get('feedback', 'N/A')}")
-                    st.download_button(f"📥 Download Report ({item['report_fn']})", item['report_bytes'], item['report_fn'], "text/plain")
 
 # --- TAB 4: ADMIN PANEL (VISIBLE ONLY TO ADMINS) ---
 if IS_ADMIN and admin_tab:
