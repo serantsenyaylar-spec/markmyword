@@ -45,10 +45,11 @@ def extract_text_from_file(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
 
-# Initialize Supabase client
-
-if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
-    supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+if "supabase" in st.secrets:
+    supabase = create_client(
+        st.secrets["supabase"]["SUPABASE_URL"], 
+        st.secrets["supabase"]["SUPABASE_KEY"]
+    )
 else:
     supabase = None
     st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
