@@ -341,6 +341,28 @@ def track_user_login():
 # --- EXECUTE AUTHENTICATION ---
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
+USER_NAME = st.session_state.get("user_name", "Teacher")
+USER_EMAIL = st.session_state.get("user_email", "teacher@istek.k12.tr")
+log_user_login(USER_NAME, USER_EMAIL)
+
+def log_user_login(user_name, user_email):
+    """Logs user name and email access immediately upon page visit."""
+    if not supabase:
+        return
+        
+    if st.session_state.get("session_logged"):
+        return # Prevents duplicate entries per session
+
+    try:
+        supabase.table("user_logs").insert({
+            "user_email": user_email,
+            "action": "User Access",
+            "details": f"Logged in as {user_name}"
+        }).execute()
+        st.session_state["session_logged"] = True
+    except Exception as e:
+        print(f"Error logging session: {e}")
+        
 # --- LOG USER LOGIN (ONCE PER SESSION) ---
 if not st.session_state.get("user_session_logged", False):
     st.session_state.user_session_logged = True
