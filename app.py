@@ -159,15 +159,15 @@ def check_authentication():
             st.info(f"📊 **Session Usage:** {st.session_state.get('graded_count', 0)}/{MAX_PAPERS_PER_SESSION} papers")
 
         st.divider()
-
+        
         st.markdown("### 🌐 **Workspace Links**")
-       workspace_links = [
-    {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"},
-    {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"},
-    {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://ssl.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png"},
-    {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://ssl.gstatic.com/images/branding/product/1x/docs_2020q4_48dp.png"},
-    {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/calendar_2020q4_48dp.png"}
-]
+        workspace_links = [
+            {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"},
+            {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"},
+            {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://ssl.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png"},
+            {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://ssl.gstatic.com/images/branding/product/1x/docs_2020q4_48dp.png"},
+            {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/calendar_2020q4_48dp.png"}
+        ]
 
         for item in workspace_links:
             st.markdown(f"""
