@@ -161,13 +161,13 @@ def check_authentication():
         st.divider()
 
         st.markdown("### 🌐 **Workspace Links**")
-        workspace_links = [
-            {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/7/7e/Gmail_icon_%282020%29.svg"},
-            {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/1/12/Google_Drive_icon_%282020%29.svg"},
-            {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/ae/Google_Sheets_2020_Logo.svg"},
-            {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://upload.wikimedia.org/wikipedia/commons/0/01/Google_Docs_2020_Logo.svg"},
-            {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Google_Calendar_icon_%282020%29.svg"}
-        ]
+       workspace_links = [
+    {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"},
+    {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"},
+    {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://ssl.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png"},
+    {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://ssl.gstatic.com/images/branding/product/1x/docs_2020q4_48dp.png"},
+    {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/calendar_2020q4_48dp.png"}
+]
 
         for item in workspace_links:
             st.markdown(f"""
@@ -521,81 +521,73 @@ wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
 # --- TAB 1: SETUP ---
 with wizard_tab1:
     
-    st.components.v1.html(
-        """
-        <div style="
-            background: rgba(128, 128, 128, 0.06);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(128, 128, 128, 0.18);
-            border-radius: 14px;
-            padding: 10px 18px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
-        ">
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <div style="position: relative; display: flex; align-items: center; justify-content: center;">
-                    <span style="
-                        width: 10px;
-                        height: 10px;
-                        background-color: #10b981;
-                        border-radius: 50%;
-                        display: inline-block;
-                        box-shadow: 0 0 10px #10b981;
-                    "></span>
-                    <span style="
-                        position: absolute;
-                        width: 18px;
-                        height: 18px;
-                        background-color: rgba(16, 185, 129, 0.4);
-                        border-radius: 50%;
-                        animation: pulse 2s infinite ease-in-out;
-                    "></span>
-                </div>
-                <div>
-                    <div style="font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; opacity: 0.65; margin-bottom: 2px;">Local Time</div>
-                    <div id="clock-date" style="font-size: 0.88rem; font-weight: 600; opacity: 0.9;">Loading...</div>
-                </div>
-            </div>
-            <div id="clock-time" style="
-                font-family: 'JetBrains Mono', 'Fira Code', Monaco, monospace;
-                font-size: 1.4rem;
-                font-weight: 800;
-                letter-spacing: -0.02em;
-                background: linear-gradient(135deg, #2563eb, #3b82f6);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
+   st.components.v1.html(
+    """
+    <div style="
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08));
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        border-radius: 12px;
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
+    ">
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <div style="
+                background: rgba(16, 185, 129, 0.15); 
+                padding: 8px 12px; 
+                border-radius: 8px; 
+                display: flex; 
+                align-items: center; 
+                gap: 8px;
             ">
-                00:00:00
+                <span style="
+                    width: 8px;
+                    height: 8px;
+                    background-color: #10b981;
+                    border-radius: 50%;
+                    display: inline-block;
+                    box-shadow: 0 0 8px #10b981;
+                "></span>
+                <span style="font-size: 0.75rem; font-weight: 700; color: #059669; letter-spacing: 0.05em; text-transform: uppercase;">
+                    LIVE CLOCK
+                </span>
+            </div>
+            <div>
+                <div id="clock-date" style="font-size: 0.95rem; font-weight: 600; opacity: 0.85;">
+                    Loading...
+                </div>
             </div>
         </div>
 
-        <style>
-            @keyframes pulse {
-                0% { transform: scale(0.6); opacity: 0.8; }
-                50% { transform: scale(1.4); opacity: 0.2; }
-                100% { transform: scale(0.6); opacity: 0.8; }
-            }
-        </style>
+        <div id="clock-time" style="
+            font-family: 'JetBrains Mono', monospace, sans-serif;
+            font-size: 1.5rem;
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: #2563eb;
+        ">
+            00:00:00
+        </div>
+    </div>
 
-        <script>
-            function updateClock() {
-                const now = new Date();
-                const dateOptions = { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' };
-                const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
-                
-                document.getElementById('clock-date').innerText = now.toLocaleDateString(undefined, dateOptions);
-                document.getElementById('clock-time').innerText = now.toLocaleTimeString(undefined, timeOptions);
-            }
-            updateClock();
-            setInterval(updateClock, 1000);
-        </script>
-        """,
-        height=80,
-    )
+    <script>
+        function updateClock() {
+            const now = new Date();
+            const dateOptions = { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' };
+            const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+            
+            document.getElementById('clock-date').innerText = now.toLocaleDateString('en-US', dateOptions);
+            document.getElementById('clock-time').innerText = now.toLocaleTimeString('en-US', timeOptions);
+        }
+        updateClock();
+        setInterval(updateClock, 1000);
+    </script>
+    """,
+    height=70,
+)
 
     st.markdown("#### ⚡ Quick Assignment Presets")
     
