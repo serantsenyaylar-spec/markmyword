@@ -24,13 +24,15 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
+Python
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
     page_icon="📝", 
     layout="wide", 
     initial_sidebar_state="collapsed"
-    
+)
+
 # --- PYDANTIC SCHEMA FOR GEMINI STRUCTURED OUTPUT ---
 class GradingOutput(BaseModel):
     is_valid_submission: bool
