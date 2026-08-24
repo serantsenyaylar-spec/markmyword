@@ -302,7 +302,7 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
         print(f"Sheets Save Error: {e}")
         return False
 
---- UI BADGES & HELPERS ---
+# --- UI BADGES & HELPERS ---
 def get_score_badge(score, max_score):
     """Generates a colored HTML badge for Tab 3 based on the grade percentage."""
     try:
