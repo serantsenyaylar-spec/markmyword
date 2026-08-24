@@ -517,7 +517,7 @@ You MUST output strictly in valid JSON format matching this exact structure:
 }"""
 
 # --- HEADER & STEPPER ---
-col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
+col_logo, col_title, col_time = st.columns([1, 3, 1], vertical_alignment="center")
 
 with col_logo:
     try:
@@ -528,6 +528,16 @@ with col_logo:
 with col_title:
     st.title("Mark My Words")
     st.markdown("### **İSTEK Schools Automated English Grader**")
+
+with col_time:
+    # Get the current time and format it cleanly, aligned to the right
+    current_time = datetime.datetime.now().strftime('%b %d, %Y | %H:%M')
+    st.markdown(
+        f"<div style='text-align: right; color: #6b7280; font-size: 0.95rem; margin-top: 15px;'>"
+        f"🕒 <b>{current_time}</b>"
+        f"</div>", 
+        unsafe_allow_html=True
+    )
 
 st.markdown("""
 <div class="stepper-container">
@@ -546,75 +556,6 @@ wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
 
 # --- TAB 1: SETUP ---
 with wizard_tab1:
-    
-    st.components.v1.html(
-    """
-    <div style="
-        background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08));
-        border: 1px solid rgba(128, 128, 128, 0.2);
-        border-radius: 12px;
-        padding: 12px 20px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font-family: 'Inter', system-ui, -apple-system, sans-serif;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
-    ">
-        <div style="display: flex; align-items: center; gap: 14px;">
-            <div style="
-                background: rgba(16, 185, 129, 0.15); 
-                padding: 8px 12px; 
-                border-radius: 8px; 
-                display: flex; 
-                align-items: center; 
-                gap: 8px;
-            ">
-                <span style="
-                    width: 8px;
-                    height: 8px;
-                    background-color: #10b981;
-                    border-radius: 50%;
-                    display: inline-block;
-                    box-shadow: 0 0 8px #10b981;
-                "></span>
-                <span style="font-size: 0.75rem; font-weight: 700; color: #059669; letter-spacing: 0.05em; text-transform: uppercase;">
-                    LIVE CLOCK
-                </span>
-            </div>
-            <div>
-                <div id="clock-date" style="font-size: 0.95rem; font-weight: 600; opacity: 0.85;">
-                    Loading...
-                </div>
-            </div>
-        </div>
-
-        <div id="clock-time" style="
-            font-family: 'JetBrains Mono', monospace, sans-serif;
-            font-size: 1.5rem;
-            font-weight: 800;
-            letter-spacing: 1px;
-            color: #2563eb;
-        ">
-            00:00:00
-        </div>
-    </div>
-
-    <script>
-        function updateClock() {
-            const now = new Date();
-            const dateOptions = { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' };
-            const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
-            
-            document.getElementById('clock-date').innerText = now.toLocaleDateString('en-US', dateOptions);
-            document.getElementById('clock-time').innerText = now.toLocaleTimeString('en-US', timeOptions);
-        }
-        updateClock();
-        setInterval(updateClock, 1000);
-    </script>
-    """,
-    height=70,
-    )
-
     st.markdown("#### ⚡ Quick Assignment Presets")
     
     default_essay_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
