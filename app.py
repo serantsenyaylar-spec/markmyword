@@ -45,8 +45,8 @@ def extract_text_from_file(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
 
-def log_user_session(user_email):
-    if USER_EMAIL:
+# --- USER LOGIN DETECTION & TRACKING ---
+if USER_EMAIL:
     log_user_session(USER_EMAIL)
     """Logs user access immediately upon page visit."""
     if "session_logged" not in st.session_state:
