@@ -1088,8 +1088,11 @@ with t3_sub2:
 # --- TAB 4: ADMIN PANEL (VISIBLE ONLY TO ADMINS) ---
 
 if IS_ADMIN and admin_tab:
-  with admin_tab:
-    st.markdown("### 🛡️ İSTEK Admin Command Center")
+ with admin_tab:
+    st.markdown("### 🛡️ Admin Dashboard")
+    
+    # --- CREATE SUB-TABS BEFORE USING THEM ---
+    admin_sub1, admin_sub2, admin_sub3 = st.tabs(["📊 User Activity Logs", "📝 Essay Exemplars", "⚙️ System Settings"])
     
     # --- PASTE HERE: LIVE WEBSITE LOGIN NOTIFICATIONS ---
     try:
@@ -1116,8 +1119,8 @@ if IS_ADMIN and admin_tab:
     st.divider()
 
     # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
-    with admin_sub1:
-        st.markdown("#### 🎯 Grade Override & Scoring Consistency")
+   with admin_sub1:
+        st.markdown("#### Real-Time User Activity")
         if essay_data:
             df_insights = pd.DataFrame(essay_data)
             
@@ -1158,8 +1161,8 @@ if IS_ADMIN and admin_tab:
             st.info("No evaluated essay memory records found to analyze.")
 
     # --- SUB-TAB 2: ESSAY HISTORY & AUDIT EXPORT ---
-    with admin_sub2:
-        st.markdown("#### 📑 Live Essay Memory Inspector")
+   with admin_sub2:
+        st.markdown("#### Saved Exemplars")
         if essay_data:
             df_audit = pd.DataFrame(essay_data)
             
@@ -1188,8 +1191,8 @@ if IS_ADMIN and admin_tab:
             st.info("No audit records stored in database.")
 
     # --- SUB-TAB 3: OPERATIONAL & QUOTA CONTROL ---
-    with admin_sub3:
-        st.markdown("#### 🚦 System Health & Quota Diagnostics")
+   with admin_sub3:
+        st.markdown("#### Settings")
         col_op1, col_op2 = st.columns(2)
         
         with col_op1:
