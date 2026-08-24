@@ -44,6 +44,27 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return None
+        
+def log_user_login(user_name, user_email):
+    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
+    try:
+        creds = get_google_credentials()
+        if not creds:
+            return None
+
+        client = gspread.authorize(creds)
+        sheet_id = get_secret("SHEET_ID")
+        
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).worksheet("Logins")
+        else:
+            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
+            
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        sheet.append_row([timestamp, user_name, user_email])
+        
+    except Exception as e:
+        print(f"Login Tracking Error: {e}")
 
 # Safe Supabase connection setup
 try:
