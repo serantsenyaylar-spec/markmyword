@@ -58,14 +58,7 @@ except Exception:
 def save_teacher_exemplar(student_text, rubric_type, teacher_score, teacher_feedback):
     """Converts student text to a vector embedding and saves the teacher's grade to Supabase."""
     try:
-        # 1. Embed the essay using OpenAI (or Gemini embedding API)
-        emb_res = openai.embeddings.create(
-            input=student_text,
-            model="text-embedding-3-small"
-        )
-        embedding = emb_res.data[0].embedding
-
-        # 2. Save directly into Supabase database
+        # Save directly into Supabase database
         supabase.table("essay_memory").insert({
             "essay_text": student_text,
             "rubric_type": rubric_type,
@@ -506,58 +499,6 @@ You MUST output strictly in valid JSON format matching this exact structure:
   "total_score": 0.0,
   "feedback": "string"
 }"""
-
-def run_gemini_structured(client, model_name, user_prompt, file_bytes, mime_type):
-    """Executes Gemini API safely across main or background threads."""
-    if not client:
-        return {}
-    try:
-        # Prepare content payload
-        contents = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                    types.Part.from_text(text=user_prompt)
-                ]
-            )
-        ]
-        
-        response = client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=GradingOutput
-            )
-        )
-        return json.loads(response.text)
-
-    except Exception as e:
-        # REPLACE st.error() WITH LOGGING / PRINT
-        # This prevents Streamlit thread context crashes
-        print(f"[Gemini Worker Error] {model_name}: {str(e)}")
-        return {}
-
-def run_groq_structured(client, user_prompt, text_content):
-    """Executes Groq API safely across main or background threads."""
-    if not client or not text_content:
-        return {}
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are an expert academic evaluator. Return JSON matching the schema."},
-                {"role": "user", "content": f"{user_prompt}\n\n<student_submission>\n{text_content}\n</student_submission>"}
-            ],
-            response_format={"type": "json_object"}
-        )
-        return json.loads(completion.choices[0].message.content)
-
-    except Exception as e:
-        # REPLACE st.error() WITH LOGGING / PRINT
-        print(f"[Groq Worker Error]: {str(e)}")
-        return {}
 
 # --- HEADER & STEPPER ---
 col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
