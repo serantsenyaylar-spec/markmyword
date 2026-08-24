@@ -530,13 +530,36 @@ with col_title:
     st.markdown("### **İSTEK Schools Automated English Grader**")
 
 with col_time:
-    # Get the current time and format it cleanly, aligned to the right
-    current_time = datetime.datetime.now().strftime('%b %d, %Y | %H:%M')
-    st.markdown(
-        f"<div style='text-align: right; color: #6b7280; font-size: 0.95rem; margin-top: 15px;'>"
-        f"🕒 <b>{current_time}</b>"
-        f"</div>", 
-        unsafe_allow_html=True
+    import streamlit.components.v1 as components
+    components.html(
+        """
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+            body { margin: 0; overflow: hidden; background-color: transparent; }
+            #client-time {
+                text-align: right; 
+                color: #6b7280; 
+                font-family: 'Inter', sans-serif; 
+                font-size: 0.95rem; 
+                margin-top: 15px;
+            }
+        </style>
+        <div id="client-time">🕒 <b>Loading...</b></div>
+        
+        <script>
+            function updateTime() {
+                const now = new Date();
+                // Grabs the browser's local timezone automatically
+                const dateStr = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                const timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+                
+                document.getElementById('client-time').innerHTML = "🕒 <b>" + dateStr + " | " + timeStr + "</b>";
+            }
+            updateTime(); // Run immediately
+            setInterval(updateTime, 60000); // Update every minute
+        </script>
+        """,
+        height=60,
     )
 
 st.markdown("""
