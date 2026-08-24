@@ -707,7 +707,7 @@ with wizard_tab1:
                 if q_file.name.endswith(".txt"):
                     active_q = q_bytes.decode("utf-8", errors="ignore")
                 else:
-                    gemini_key = get_secret("gemini_api_key")
+                    gemini_key = get_secret("GEMINI_API_KEY")
                     if gemini_key:
                         try:
                             g_client = genai.Client(api_key=gemini_key)
