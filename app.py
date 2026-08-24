@@ -1119,7 +1119,7 @@ if IS_ADMIN and admin_tab:
     st.divider()
 
     # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
-    with admin_sub1:
+with admin_sub1:
         st.markdown("#### Real-Time User Activity")
         if essay_data:
             df_insights = pd.DataFrame(essay_data)
@@ -1161,7 +1161,7 @@ if IS_ADMIN and admin_tab:
             st.info("No evaluated essay memory records found to analyze.")
 
     # --- SUB-TAB 2: ESSAY HISTORY & AUDIT EXPORT ---
-        with admin_sub2:
+with admin_sub2:
         st.markdown("#### Saved Exemplars")
         if essay_data:
             df_audit = pd.DataFrame(essay_data)
@@ -1191,8 +1191,8 @@ if IS_ADMIN and admin_tab:
             st.info("No audit records stored in database.")
 
     # --- SUB-TAB 3: OPERATIONAL & QUOTA CONTROL ---
-    with admin_sub3:
-        st.markdown("#### Settings")
+with admin_sub3:
+        st.markdown("#### System Settings")
         col_op1, col_op2 = st.columns(2)
         
         with col_op1:
