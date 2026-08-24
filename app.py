@@ -521,7 +521,7 @@ wizard_tab1, wizard_tab2, wizard_tab3 = st.tabs([
 # --- TAB 1: SETUP ---
 with wizard_tab1:
     
-   st.components.v1.html(
+    st.components.v1.html(
     """
     <div style="
         background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08));
@@ -587,13 +587,14 @@ with wizard_tab1:
     </script>
     """,
     height=70,
-)
+    )
 
-    st.components.v1.html
+    st.markdown("#### ⚡ Quick Assignment Presets")
     
     default_essay_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
     default_para_question = "Write a 70-90 word paragraph describing your ideal morning routine before school starts. Explain why each activity helps your day."
-
+    
+    
     qc1, qc2, qc3 = st.columns(3)
     with qc1:
         if st.button("📝 B1 Guided Essay\n(120–150 words)", use_container_width=True):
