@@ -16,7 +16,7 @@ import concurrent.futures
 from io import BytesIO
 from pydantic import BaseModel
 import plotly.express as px
-import openai
+import google.generativeai as genai
 from supabase import create_client
 
 # --- FREE API INTEGRATIONS ---
