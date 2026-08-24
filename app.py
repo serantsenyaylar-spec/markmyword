@@ -77,25 +77,22 @@ def save_teacher_exemplar(student_text, rubric_type, teacher_score, teacher_feed
     except Exception as e:
         st.error(f"Could not save exemplar to memory: {e}")
 
-        def track_user_login():
-    """Automatically logs the user's visit/login once per session."""
-    # Look for common session state keys where user emails are typically stored
+def track_user_login():
+    # Automatically logs the user's visit/login once per session.
     user_email = None
     for key in ["user_email", "email", "user", "username"]:
         if key in st.session_state and st.session_state[key]:
             val = st.session_state[key]
-            # Handle if it's stored as a dictionary or a direct string
             user_email = val.get("email") if isinstance(val, dict) else str(val)
             break
 
-    # If we found an email and haven't logged them yet this session
     if user_email and not st.session_state.get("login_tracked_db"):
         try:
             supabase.table("user_logs").insert({"email": user_email}).execute()
             st.session_state["login_tracked_db"] = True
         except Exception:
-            pass # Fail silently if offline or table missing
-    
+            pass
+            
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK", 
