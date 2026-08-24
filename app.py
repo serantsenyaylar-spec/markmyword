@@ -246,26 +246,21 @@ def check_authentication():
 
     return is_admin, user_email, user_name
 
-def track_user_login() log_user_login(user_name, user_email):
-    """Logs the user's login time to a 'Logins' worksheet in Google Sheets."""
-    try:
-        creds = get_google_credentials()
-        if not creds:
-            return None
+def track_user_login():
+    # Automatically logs the user's visit/login once per session.
+    user_email = None
+    for key in ["user_email", "email", "user", "username"]:
+        if key in st.session_state and st.session_state[key]:
+            val = st.session_state[key]
+            user_email = val.get("email") if isinstance(val, dict) else str(val)
+            break
 
-        client = gspread.authorize(creds)
-        sheet_id = get_secret("SHEET_ID")
-        
-        if sheet_id:
-            sheet = client.open_by_key(sheet_id).worksheet("Logins")
-        else:
-            sheet = client.open("İstek_Schools_Grading_Database").worksheet("Logins")
-            
-        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        sheet.append_row([timestamp, user_name, user_email])
-        
-    except Exception as e:
-        print(f"Login Tracking Error: {e}")
+    if user_email and not st.session_state.get("login_tracked_db"):
+        try:
+            supabase.table("user_logs").insert({"email": user_email}).execute()
+            st.session_state["login_tracked_db"] = True
+        except Exception:
+            pass
 
 # --- EXECUTE AUTHENTICATION ---
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
