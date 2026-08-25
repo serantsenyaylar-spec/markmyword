@@ -895,23 +895,13 @@ with wizard_tab2:
     col_u1, col_u2 = st.columns(2)
     
     with col_u1:
-        st.markdown("#### 1. Prompt & Evaluation Rules")
-        q_file = st.file_uploader(
-            "Upload Alternate Question Paper (Optional)",
-            type=["txt", "pdf", "docx"],
-            key="q_file_uploader_tab2"
+        st.markdown("#### 1. Active Question & Prompt")
+        st.text_area(
+            "Active Prompt (Selected in Tab 1):",
+            value=st.session_state.get("active_question", "No prompt selected. Return to Tab 1."),
+            height=140,
+            disabled=True
         )
-        
-        if q_file is not None:
-            question_text = extract_text_from_file(q_file)
-            st.session_state.active_question = question_text
-            st.success(f"Custom Prompt Loaded: **{q_file.name}**")
-        else:
-            question_text = st.text_area(
-                "Active Question Paper / Prompt:",
-                value=st.session_state.get("active_question", "No prompt selected. Return to Tab 1."),
-                height=120
-            )
 
     with col_u2:
         st.markdown("#### 2. Student Submissions")
@@ -976,7 +966,7 @@ with wizard_tab2:
                 status_text.empty()
                 progress_bar.empty()
                 st.success(f"🎉 Evaluated {len(student_files)} paper(s)! Proceed to **Analytics & Reports** to inspect grades.")
-
+                
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
     t3_sub1, t3_sub2 = st.tabs(["📝 Batch Review & Grading", "📂 Student Portfolio Lookup"])
