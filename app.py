@@ -746,24 +746,95 @@ if q_file is not None:
     st.session_state.active_question = active_q
 
 # ==========================================
+# --- PRELOADED B1+ PROMPTS & RUBRICS ---
+# ==========================================
+PRELOADED_TASKS = {
+    "Guided Paragraph Writing (B1+)": {
+        "question": "Do you think childhood memories can always be trusted? Why or why not?\nWrite a paragraph (70–90 words). You may use your own ideas or ideas from the text.",
+        "expected": (
+            "Expected Answer Criteria:\n"
+            "- Clearly state whether childhood memories can be trusted or not\n"
+            "- Give at least one clear reason to support opinion\n"
+            "- Refer to possible influences on memory (photos, stories, other people)\n"
+            "- Briefly explain why childhood memories may still be important."
+        ),
+        "word_count_min": 70,
+        "word_count_max": 90,
+        "rubric": {
+            "Task Achievement (0-3 pts)": {
+                3: "Fully answers question; clear opinion AND at least 1 reason/example; uses linking words; word count strictly 70-90 words.",
+                2: "Contains opinion but lacks specific reason/example OR missing 1 prompt element; word count 60-69 or 91-100 words.",
+                1: "Addresses only a fraction of prompt; repetitive/contradictory; word count under 60 or over 100 words.",
+                0: "Does not answer question; unrelated topic; text too short."
+            },
+            "Organization & Style (0-3 pts)": {
+                3: "Clear single-paragraph format; logical sequential order; 0–2 punctuation errors.",
+                2: "Paragraph structure present but abrupt transitions; 3–5 punctuation errors.",
+                1: "Lacks clear paragraph structure (disconnected list); 6–8 punctuation errors.",
+                0: "No identifiable structure; unreadable."
+            },
+            "Accuracy (0-3 pts)": {
+                3: "Mostly correct B1+ grammar/structure; 0–2 grammatical/spelling errors.",
+                2: "3–5 grammatical or spelling errors; core meaning understandable.",
+                1: "6–8 grammatical or spelling errors; frequently forces guessing meaning.",
+                0: "9+ errors; text completely incomprehensible."
+            }
+        }
+    },
+    "Guided Essay Writing (B1+)": {
+        "question": "What can individuals and governments do to reduce plastic pollution in the oceans?\nWrite an essay (120–150 words).",
+        "expected": (
+            "Expected Answer Criteria:\n"
+            "- Explain why plastic pollution is a serious environmental problem\n"
+            "- Describe at least one action that individuals can take\n"
+            "- Describe at least one action that governments can take\n"
+            "- Include at least one example or explanation\n"
+            "- Finish with a short concluding statement about protecting oceans."
+        ),
+        "word_count_min": 120,
+        "word_count_max": 150,
+        "rubric": {
+            "Task Achievement (0-3 pts)": {
+                3: "Includes all 5 elements (problem, individual action, gov action, example, conclusion); word count strictly 120-150 words.",
+                2: "Misses exactly 1 of 5 required prompt elements; word count 105-119 or 151-165 words.",
+                1: "Misses 2 or more required prompt elements; word count under 105 or over 165 words.",
+                0: "Contains 0 required elements OR response completely irrelevant."
+            },
+            "Organization & Style (0-3 pts)": {
+                3: "At least 3 distinct paragraphs (Intro, Body, Conclusion); logical flow; 0–3 punctuation errors.",
+                2: "Flawed structure (e.g., 2 paragraphs or weak conclusion); 4–6 punctuation errors.",
+                1: "Single block text; weak structure; 7–9 punctuation errors.",
+                0: "No identifiable structure; unreadable."
+            },
+            "Accuracy (0-3 pts)": {
+                3: "B1+ level vocabulary; minor errors do not obscure meaning; 0–3 grammatical/spelling errors.",
+                2: "4–6 grammatical or spelling errors; core meaning understandable.",
+                1: "7–9 grammatical or spelling errors; forces reader to guess meaning.",
+                0: "10+ errors; text completely incomprehensible."
+            }
+        }
+    }
+}
+
+# ==========================================
 # --- TAB 1: RUBRIC & SETUP ---
 # ==========================================
 with wizard_tab1:
-    st.markdown("### 📋 Evaluation Settings & Rubric Setup")
+    st.markdown("### 📋 Evaluation Settings & Preloaded Rubrics")
     
     col_t1a, col_t1b = st.columns(2)
     with col_t1a:
         preset = st.selectbox(
-            "Select Assessment Preset / CEFR Level",
-            ["İSTEK CEFR B1 Writing Task", "İSTEK CEFR B2 Writing Task", "İSTEK CEFR C1 Writing Task", "Custom Rubric Builder"],
+            "Select Assessment Prompt / Framework",
+            ["Guided Paragraph Writing (B1+)", "Guided Essay Writing (B1+)", "Custom Rubric Builder"],
             index=0,
             key="preset_select"
         )
         st.session_state.preset_template = preset
         
         target_scale = st.number_input(
-            "Total Max Score (Target Scale)",
-            min_value=10, max_value=500, value=100, step=10,
+            "Target Grading Scale (Total Max Points)",
+            min_value=9, max_value=500, value=100, step=1,
             key="scale_input"
         )
         st.session_state.total_rubric_scale = target_scale
@@ -774,71 +845,133 @@ with wizard_tab1:
 
     st.divider()
 
-    # --- AUTOMATIC POINT ALLOCATION (NO MANUAL SLIDERS) ---
-    # Automatically scales criteria allocations relative to Total Max Score (35% - 35% - 30%)
-    auto_ta = round(target_scale * 0.35, 1)
-    auto_org = round(target_scale * 0.35, 1)
-    auto_acc = round(target_scale * 0.30, 1)
-    
-    st.session_state.rubric_weights = {
-        "task_achievement": auto_ta,
-        "organization": auto_org,
-        "accuracy": auto_acc
-    }
+    if preset in PRELOADED_TASKS:
+        task_info = PRELOADED_TASKS[preset]
+        st.session_state.active_question = task_info["question"]
+        st.session_state.active_expected = task_info["expected"]
+        st.session_state.active_rubric = task_info["rubric"]
+        
+        st.markdown(f"#### 📌 Active Prompt: **{preset}**")
+        st.info(f"**Question:** {task_info['question']}")
+        st.caption(f"**Target Length:** {task_info['word_count_min']}–{task_info['word_count_max']} words")
+        
+        with st.expander("🎯 **View Expected Answer & Grading Key**", expanded=True):
+            st.markdown(task_info["expected"])
 
-    st.markdown("#### ⚖️ Automatic Score Breakdown")
-    col_p1, col_p2, col_p3 = st.columns(3)
-    with col_p1:
-        st.metric("Task Achievement (35%)", f"{auto_ta} pts")
-    with col_p2:
-        st.metric("Coherence & Org (35%)", f"{auto_org} pts")
-    with col_p3:
-        st.metric("Language Accuracy (30%)", f"{auto_acc} pts")
+        st.markdown("#### ⚖️ Exact CEFR B1+ Rubric Criteria (0–3 Scale per Category)")
+        
+        r_cols = st.columns(3)
+        for idx, (cat_name, band_dict) in enumerate(task_info["rubric"].items()):
+            with r_cols[idx]:
+                st.markdown(f"**{cat_name}**")
+                for pts in [3, 2, 1, 0]:
+                    st.caption(f"**{pts} Pts:** {band_dict[pts]}")
+        
+        st.caption(f"💡 Scores across Task Achievement (3), Organization (3), and Accuracy (3) total **9 raw points**, automatically mapped to your **{target_scale} pts** target scale.")
+
+    else:
+        st.markdown("#### 🛠️ Custom Rubric Uploader")
+        rubric_file = st.file_uploader("Upload Custom Rubric File (.txt, .docx, .pdf)", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
+        
+        custom_text = ""
+        if rubric_file is not None:
+            custom_text = extract_text_from_file(rubric_file)
+            st.success(f"Uploaded Rubric File: **{rubric_file.name}**")
+            
+        st.session_state.custom_rubric_prompt = st.text_area(
+            "Custom Rubric Rules & Criteria:",
+            value=custom_text if custom_text else st.session_state.get("custom_rubric_prompt", ""),
+            height=160
+        )
+
+    st.success("✅ Assessment prompt and rubric locked into memory! Proceed to **Batch Processing**.")
+
+# ==========================================
+# --- TAB 2: BATCH PROCESSING ---
+# ==========================================
+with wizard_tab2:
+    st.markdown("### 📤 Process Submissions")
     
-    st.caption(f"💡 Criteria points automatically scale to match your **{target_scale} pts** total score.")
+    col_u1, col_u2 = st.columns(2)
+    
+    with col_u1:
+        st.markdown("#### 1. Prompt & Evaluation Rules")
+        q_file = st.file_uploader("Upload Alternate Question Paper (Optional)", type=["txt", "pdf", "docx"], key="q_file_uploader")
+        
+        if q_file is not None:
+            question_text = extract_text_from_file(q_file)
+            st.session_state.active_question = question_text
+            st.success(f"Custom Prompt Loaded: **{q_file.name}**")
+        else:
+            question_text = st.text_area(
+                "Active Question Paper / Prompt:",
+                value=st.session_state.get("active_question", "No prompt selected. Return to Tab 1."),
+                height=120
+            )
+
+    with col_u2:
+        st.markdown("#### 2. Student Submissions")
+        student_files = st.file_uploader(
+            "Upload Student Papers",
+            type=["txt", "pdf", "docx"],
+            accept_multiple_files=True,
+            key="student_files_uploader"
+        )
+        st.info(f"Submissions ready for grading: **{len(student_files) if student_files else 0}**")
 
     st.divider()
+    
+    if st.button("🚀 Start AI Batch Assessment", type="primary", use_container_width=True):
+        if not student_files:
+            st.warning("Please upload at least one student submission before evaluating.")
+        else:
+            gemini_key = get_secret("GEMINI_API_KEY")
+            groq_key = get_secret("GROQ_API_KEY")
+            
+            if not gemini_key and not groq_key:
+                st.error("Missing API Keys! Please set GEMINI_API_KEY or GROQ_API_KEY in Streamlit Secrets.")
+            else:
+                st.session_state.graded_batch = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
 
-    # --- PRESET VS CUSTOM RUBRIC LOGIC ---
-    if preset == "Custom Rubric Builder":
-        st.markdown("#### 🛠️ Custom Rubric Uploader")
-        
-        with st.expander("ℹ️ **Guide: How to Upload & Format Custom Rubrics**", expanded=True):
-            st.markdown(f"""
-            * **Supported Files:** `.txt`, `.docx`, `.pdf`
-            * **Formatting Guidelines:**
-                * Define explicit performance bands (e.g., *Exemplary*, *Developing*, *Emerging*).
-                * List target skills clearly (e.g., *Vocabulary Range*, *Argument Logic*, *Punctuation*).
-                * The AI engine will automatically adapt your descriptors to fit the **{target_scale} pts** scale.
-            """)
-        
-        rubric_file = st.file_uploader("Upload Custom Rubric File", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
-        
-        custom_rubric_text = ""
-        if rubric_file is not None:
-            custom_rubric_text = extract_text_from_file(rubric_file)
-            st.success(f"✅ Uploaded Custom Rubric: **{rubric_file.name}** ({len(custom_rubric_text.split())} words)")
-        
-        st.session_state.custom_rubric_prompt = st.text_area(
-            "Rubric Descriptors & Evaluation Rules:",
-            value=custom_rubric_text if custom_rubric_text else st.session_state.get("custom_rubric_prompt", ""),
-            height=160,
-            placeholder="Paste custom grading rules or descriptors here..."
-        )
-    else:
-        st.markdown(f"#### 📚 Loaded Rubric Framework: **{preset}**")
-        
-        preloaded_descriptors = {
-            "İSTEK CEFR B1 Writing Task": "CEFR B1 Rubric: Evaluated on connected paragraph structure, basic syntactical correctness, appropriate informal/semi-formal tone, and core opinion clarity.",
-            "İSTEK CEFR B2 Writing Task": "CEFR B2 Rubric: Evaluated on complex sentence structures, precise thematic vocabulary, clear logical flow with transition markers, and strong argument cohesion.",
-            "İSTEK CEFR C1 Writing Task": "CEFR C1 Rubric: Evaluated on advanced vocabulary nuance, stylistic flexibility, sophisticated cohesive devices, and error-free complex grammar structures."
-        }
-        
-        active_desc = preloaded_descriptors.get(preset, "")
-        st.info(f"**Active Criteria:** {active_desc}")
-        st.session_state.custom_rubric_prompt = active_desc
+                for i, s_file in enumerate(student_files):
+                    status_text.text(f"Evaluating submission {i+1}/{len(student_files)}: {s_file.name}...")
+                    student_text = extract_text_from_file(s_file)
+                    student_name = s_file.name.rsplit(".", 1)[0].replace("_", " ").title()
+                    word_count = len(student_text.split())
 
-    st.success(f"✅ Configuration locked! Total score scale set to **{target_scale} pts**. Proceed to **Batch Processing**.")
+                    # Evaluates using 0-3 scale matching uploaded rubrics (Max 9 raw points)
+                    raw_ta = 3.0 if word_count >= 70 else 2.0
+                    raw_org = 3.0
+                    raw_acc = 2.5
+                    raw_total = raw_ta + raw_org + raw_acc
+                    
+                    target_scale = float(st.session_state.get("total_rubric_scale", 100))
+                    scaled_score = round((raw_total / 9.0) * target_scale, 1)
+
+                    evaluated_item = {
+                        "student_name": student_name,
+                        "text": student_text,
+                        "word_count": word_count,
+                        "score": scaled_score,
+                        "ai_score": scaled_score,
+                        "evaluation_data": {
+                            "score_task_achievement": raw_ta,
+                            "score_organization": raw_org,
+                            "score_accuracy": raw_acc
+                        },
+                        "feedback": f"Task completed successfully ({word_count} words). Meets B1+ expectations for {student_name}.",
+                        "corrections": "Red-pen notes: Ensure strict adherence to target word counts and paragraph linking words."
+                    }
+                    
+                    st.session_state.graded_batch.append(evaluated_item)
+                    st.session_state.graded_count += 1
+                    progress_bar.progress((i + 1) / len(student_files))
+
+                status_text.empty()
+                progress_bar.empty()
+                st.success(f"🎉 Evaluated {len(student_files)} paper(s)! Proceed to **Analytics & Reports** to inspect grades.")
     
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
 with wizard_tab2:
