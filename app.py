@@ -882,18 +882,19 @@ with wizard_tab1:
 
     else:
         st.markdown("#### 🛠️ Custom Rubric Uploader")
-        rubric_file = st.file_uploader("Upload Custom Rubric File (.txt, .docx, .pdf)", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
+        st.info(
+            "**💡 How to upload your custom rubric:**\n"
+            "1. Save your rubric as a **.txt**, **.docx**, or **.pdf** file.\n"
+            "2. Click the 'Browse files' button below or drag and drop your file into the box.\n"
+            "3. The system will automatically read your file and lock the grading rules into memory."
+        )
         
-        custom_text = ""
+        rubric_file = st.file_uploader("Upload Document", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
+        
         if rubric_file is not None:
             custom_text = extract_text_from_file(rubric_file)
-            st.success(f"Uploaded Rubric File: **{rubric_file.name}**")
-            
-        st.session_state.custom_rubric_prompt = st.text_area(
-            "Custom Rubric Rules & Criteria:",
-            value=custom_text if custom_text else st.session_state.get("custom_rubric_prompt", ""),
-            height=160
-        )
+            st.session_state.custom_rubric_prompt = custom_text
+            st.success(f"✅ Successfully uploaded and processed: **{rubric_file.name}**")
 
     st.success("✅ Assessment prompt and rubric locked into memory! Proceed to **Batch Processing**.")
 
