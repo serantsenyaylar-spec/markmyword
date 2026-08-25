@@ -896,7 +896,11 @@ with wizard_tab2:
     
     with col_u1:
         st.markdown("#### 1. Prompt & Evaluation Rules")
-        q_file = st.file_uploader("Upload Alternate Question Paper (Optional)", type=["txt", "pdf", "docx"], key="q_file_uploader")
+        q_file = st.file_uploader(
+            "Upload Alternate Question Paper (Optional)",
+            type=["txt", "pdf", "docx"],
+            key="q_file_uploader_tab2"
+        )
         
         if q_file is not None:
             question_text = extract_text_from_file(q_file)
@@ -912,10 +916,10 @@ with wizard_tab2:
     with col_u2:
         st.markdown("#### 2. Student Submissions")
         student_files = st.file_uploader(
-            "Upload Student Papers",
-            type=["txt", "pdf", "docx"],
+            "Upload Student Papers (PDF, DOCX, TXT, Images)",
+            type=["txt", "pdf", "docx", "png", "jpg", "jpeg"],
             accept_multiple_files=True,
-            key="student_files_uploader"
+            key="student_files_uploader_tab2"
         )
         st.info(f"Submissions ready for grading: **{len(student_files) if student_files else 0}**")
 
@@ -972,117 +976,6 @@ with wizard_tab2:
                 status_text.empty()
                 progress_bar.empty()
                 st.success(f"🎉 Evaluated {len(student_files)} paper(s)! Proceed to **Analytics & Reports** to inspect grades.")
-    
-# --- TAB 2: UPLOAD & LIVE PROCESS ---
-with wizard_tab2:
-    st.markdown("### 📥 Upload & Review Batch")
-    
-    uploaded_files = st.file_uploader(
-        "Drag and drop student essays (PDF, DOCX, TXT, or Images)", 
-        type=["pdf", "docx", "txt", "png", "jpg", "jpeg"], 
-        accept_multiple_files=True
-    )
-
-    if uploaded_files:
-        if "graded_batch" not in st.session_state or len(st.session_state.graded_batch) != len(uploaded_files):
-            st.session_state.graded_batch = []
-            with st.spinner("Extracting text and preparing batch..."):
-                for f in uploaded_files:
-                    content = extract_text_from_file(f) or ""
-                    
-                    # Smart auto-fill: Try guessing the name from the filename
-                    clean_filename = f.name.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ')
-                    suggested_name = ' '.join([w for w in clean_filename.split() if w.lower() not in ['essay', 'writing', 'paper', 'b1', 'task']]).title()
-                    
-                    st.session_state.graded_batch.append({
-                        "filename": f.name,
-                        "student_name": suggested_name if suggested_name else "Student Name",
-                        "text": content,
-                        "file_bytes": f.getvalue(),
-                        "mime_type": mimetypes.guess_type(f.name)[0] or "text/plain",
-                        "score": 0,
-                        "feedback": "AI evaluation pending...",
-                        "evaluation_data": None
-                    })
-            st.success(f"✅ Loaded {len(st.session_state.graded_batch)} essays!")
-
-    if "graded_batch" in st.session_state and len(st.session_state.graded_batch) > 0:
-        st.markdown("---")
-        st.markdown("### 📝 Review Uploaded Papers & Student Names")
-        
-        for i, paper in enumerate(st.session_state.graded_batch):
-            with st.expander(f"📄 Paper #{i+1}: {paper['student_name']} ({paper['filename']})", expanded=(i==0)):
-                st.session_state.graded_batch[i]['student_name'] = st.text_input(
-                    "👤 Student Name & Surname:", 
-                    value=paper['student_name'], 
-                    key=f"name_{i}"
-                )
-                
-                st.markdown("**Student Text Preview:**")
-                st.info(paper['text'][:400] + "..." if len(paper['text']) > 400 else (paper['text'] if paper['text'] else "[OCR / Image File - Text will be processed directly by AI]"))
-
-        # --- AI BATCH EXECUTION BUTTON ---
-        st.markdown("---")
-        st.markdown("### 🚀 Execute AI Evaluation")
-        
-        eval_col1, eval_col2 = st.columns([2, 1])
-        with eval_col1:
-            provider = st.selectbox("Select AI Engine Provider", ["Google Gemini (Recommended)", "Groq (Llama 3)"])
-        
-        if st.button("⚡ Run Batch Grading", type="primary", use_container_width=True):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            total_papers = len(st.session_state.graded_batch)
-            
-            for idx, paper in enumerate(st.session_state.graded_batch):
-                status_text.markdown(f"⏳ **Grading paper {idx+1} of {total_papers}:** `{paper['student_name']}`...")
-                
-                user_prompt = f"""
-                <assignment_question>
-                {st.session_state.get('active_question', 'N/A')}
-                </assignment_question>
-
-                <rubric_data>
-                {st.session_state.get('raw_rubric', 'N/A')}
-                </rubric_data>
-
-                <student_submission>
-                {paper['text']}
-                </student_submission>
-                """
-                
-                if "Gemini" in provider:
-                    res = run_gemini_structured(SYSTEM_PROMPT, user_prompt, paper['file_bytes'], paper['mime_type'])
-                else:
-                    res = run_groq_structured(SYSTEM_PROMPT, user_prompt)
-                
-                if res and res.get("is_valid_submission", True):
-                    paper['score'] = res.get("total_score", 0.0)
-                    paper['feedback'] = res.get("feedback", "No feedback provided.")
-                    paper['evaluation_data'] = res
-                else:
-                    paper['score'] = 0.0
-                    paper['feedback'] = f"Rejection/Error: {res.get('rejection_reason', 'Unable to parse essay') if res else 'API Error'}"
-                
-                progress_bar.progress((idx + 1) / total_papers)
-            
-            status_text.success("🎉 All essays graded successfully!")
-            st.session_state.active_step = 3  # Move stepper state to step 3
-
-        # --- FINALIZE AND SAVE BUTTON ---
-        st.markdown("---")
-        if st.button("💾 Finalize Batch & Save Grades", use_container_width=True):
-            with st.spinner("Saving approved grades to database and Google Drive..."):
-                for paper in st.session_state.graded_batch:
-                    save_teacher_exemplar(
-                        student_text=paper['text'],
-                        rubric_type=st.session_state.get("preset_template", "Standard Essay"), 
-                        teacher_score=paper['score'],      
-                        teacher_feedback=paper['feedback'] 
-                    )
-            st.success("Batch finalized and saved securely!")
-            st.balloons()
 
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
