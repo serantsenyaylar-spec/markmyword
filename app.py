@@ -67,22 +67,24 @@ def log_user_login(user_name, user_email):
         except Exception as e:
             print(f"Database logging error: {e}")
             
-    # Send Mobile Push Notification
-    try:
-        topic = "istek_grader_alerts_99"  
-        requests.post(
-            f"https://ntfy.sh/{topic}",
-            data=f"User Alert: {user_name} ({user_email}) just logged into the app.",
-            headers={
-                "Title": "🚨 New App Login",
-                "Priority": "high",
-                "Tags": "wave,student"
-            },
-            timeout=5
-        )
-    except Exception as e:
-        print(f"Push notification failed: {e}")
-
+    def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
+    """Sends a push notification to your phone via ntfy.sh."""
+    topic = get_secret("NTFY_TOPIC")  # Unique channel name stored in secrets
+    if topic:
+        try:
+            requests.post(
+                f"https://ntfy.sh/{topic}",
+                data=message.encode("utf-8"),
+                headers={
+                    "Title": title,
+                    "Priority": "default",
+                    "Tags": "memo,bell"
+                },
+                timeout=5
+            )
+        except Exception:
+            pass  # Fails silently so it doesn't break app execution
+            
     # Mark the login as notified
     st.session_state["login_notified"] = True
 
