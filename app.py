@@ -727,13 +727,23 @@ else:
     wizard_tab1, wizard_tab2, wizard_tab3 = tabs[0], tabs[1], tabs[2]
     admin_tab = None
 
-if q_file.name.endswith(".txt"):
-    active_q = q_bytes.decode("utf-8", errors="ignore")
-else:
-    # ... gemini extracts text ...
-    active_q = response.text.strip()
-# ... later ...
-st.session_state.active_question = active_q
+# 1. Create the uploader assigned to 'q_file'
+q_file = st.file_uploader("Upload Question Paper", type=["txt", "pdf", "docx"])
+
+active_q = ""
+
+# 2. Process only when a file is actively uploaded
+if q_file is not None:
+    if q_file.name.lower().endswith(".txt"):
+        # Safely read bytes and decode directly
+        active_q = q_file.read().decode("utf-8", errors="ignore")
+    else:
+        # Process PDF / DOCX with Gemini API
+        # response = client.models.generate_content(...)
+        active_q = response.text.strip()
+
+    # Save to session state
+    st.session_state.active_question = active_q
         
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
 with wizard_tab2:
