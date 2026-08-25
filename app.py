@@ -744,7 +744,71 @@ if q_file is not None:
 
     # Save to session state
     st.session_state.active_question = active_q
+
+# --- TAB 1: RUBRIC & SETUP ---
+with wizard_tab1:
+    st.markdown("### 📋 Evaluation Settings & Custom Rubric Setup")
+    
+    col_t1a, col_t1b = st.columns(2)
+    with col_t1a:
+        preset = st.selectbox(
+            "Select Assessment Preset / Framework",
+            ["Standard Essay (100 pts)", "CEFR B1/B2 Writing Task", "IELTS Task 2", "Custom Rubric Builder"],
+            index=0,
+            key="preset_select"
+        )
+        st.session_state.preset_template = preset
         
+        target_scale = st.number_input(
+            "Target Grading Scale (Total Max Points)",
+            min_value=10, max_value=1000, value=100, step=10,
+            key="scale_input"
+        )
+        st.session_state.total_rubric_scale = target_scale
+
+    with col_t1b:
+        st.session_state.user_name = st.text_input("Teacher Name", value=st.session_state.get("user_name", "Teacher"))
+        st.session_state.user_email = st.text_input("Teacher Email", value=st.session_state.get("user_email", "teacher@school.edu"))
+
+    st.divider()
+
+    # Dynamic Rubric Setup: Custom File/Text Input vs. Preset Sliders
+    if preset == "Custom Rubric Builder":
+        st.markdown("#### 🛠️ Custom Rubric Definition")
+        rubric_file = st.file_uploader("Upload Custom Rubric (.txt, .docx, .pdf)", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
+        
+        custom_rubric_text = ""
+        if rubric_file is not None:
+            custom_rubric_text = extract_text_from_file(rubric_file)
+            st.success(f"Loaded Rubric File: **{rubric_file.name}** ({len(custom_rubric_text.split())} words)")
+        
+        st.session_state.custom_rubric_prompt = st.text_area(
+            "Detailed Rubric Criteria / Band Descriptors:",
+            value=custom_rubric_text if custom_rubric_text else st.session_state.get("custom_rubric_prompt", ""),
+            height=180,
+            placeholder="Paste specific grading criteria, point breakdowns, band descriptors, or penalty rules here..."
+        )
+    else:
+        st.markdown("#### 🎚️ Criterion Weight Distribution")
+        col_r1, col_r2, col_r3 = st.columns(3)
+        with col_r1:
+            w_ta = st.slider("Task Achievement / Content", 0, 50, 35, key="w_ta")
+        with col_r2:
+            w_org = st.slider("Coherence & Organization", 0, 50, 35, key="w_org")
+        with col_r3:
+            w_acc = st.slider("Language Accuracy & Grammar", 0, 50, 30, key="w_acc")
+        
+        total_weight = w_ta + w_org + w_acc
+        st.caption(f"Total Weight Sum: **{total_weight} points** (Auto-scales to match **{target_scale} pts** scale during grading)")
+        
+        st.session_state.rubric_weights = {
+            "task_achievement": w_ta,
+            "organization": w_org,
+            "accuracy": w_acc
+        }
+
+    st.success("✅ Rubric configuration locked into memory! Proceed to **Batch Processing** to upload student papers.")
+    
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
 with wizard_tab2:
     st.markdown("### 📥 Upload & Review Batch")
