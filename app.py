@@ -896,12 +896,16 @@ with wizard_tab2:
     
     with col_u1:
         st.markdown("#### 1. Active Question & Prompt")
-        st.text_area(
-            "Active Prompt (Selected in Tab 1):",
-            value=st.session_state.get("active_question", "No prompt selected. Return to Tab 1."),
+        # Editable text box pre-filled from Tab 1 selection
+        edited_prompt = st.text_area(
+            "Active Question Paper / Prompt (Editable):",
+            value=st.session_state.get("active_question", ""),
             height=140,
-            disabled=True
+            key="tab2_prompt_input",
+            help="You can edit or paste a new prompt here before running batch evaluation."
         )
+        # Store modifications directly into session state
+        st.session_state.active_question = edited_prompt
 
     with col_u2:
         st.markdown("#### 2. Student Submissions")
@@ -918,6 +922,8 @@ with wizard_tab2:
     if st.button("🚀 Start AI Batch Assessment", type="primary", use_container_width=True):
         if not student_files:
             st.warning("Please upload at least one student submission before evaluating.")
+        elif not st.session_state.get("active_question", "").strip():
+            st.warning("Please enter or verify the prompt in Step 1 before starting evaluation.")
         else:
             gemini_key = get_secret("GEMINI_API_KEY")
             groq_key = get_secret("GROQ_API_KEY")
