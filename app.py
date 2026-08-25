@@ -745,23 +745,25 @@ if q_file is not None:
     # Save to session state
     st.session_state.active_question = active_q
 
+# ==========================================
 # --- TAB 1: RUBRIC & SETUP ---
+# ==========================================
 with wizard_tab1:
-    st.markdown("### 📋 Evaluation Settings & Custom Rubric Setup")
+    st.markdown("### 📋 Evaluation Settings & Rubric Setup")
     
     col_t1a, col_t1b = st.columns(2)
     with col_t1a:
         preset = st.selectbox(
-            "Select Assessment Preset / Framework",
-            ["Standard Essay (100 pts)", "CEFR B1/B2 Writing Task", "IELTS Task 2", "Custom Rubric Builder"],
+            "Select Assessment Preset / CEFR Level",
+            ["İSTEK CEFR B1 Writing Task", "İSTEK CEFR B2 Writing Task", "İSTEK CEFR C1 Writing Task", "Custom Rubric Builder"],
             index=0,
             key="preset_select"
         )
         st.session_state.preset_template = preset
         
         target_scale = st.number_input(
-            "Target Grading Scale (Total Max Points)",
-            min_value=10, max_value=1000, value=100, step=10,
+            "Total Max Score (Target Scale)",
+            min_value=10, max_value=500, value=100, step=10,
             key="scale_input"
         )
         st.session_state.total_rubric_scale = target_scale
@@ -772,42 +774,71 @@ with wizard_tab1:
 
     st.divider()
 
-    # Dynamic Rubric Setup: Custom File/Text Input vs. Preset Sliders
+    # --- AUTOMATIC POINT ALLOCATION (NO MANUAL SLIDERS) ---
+    # Automatically scales criteria allocations relative to Total Max Score (35% - 35% - 30%)
+    auto_ta = round(target_scale * 0.35, 1)
+    auto_org = round(target_scale * 0.35, 1)
+    auto_acc = round(target_scale * 0.30, 1)
+    
+    st.session_state.rubric_weights = {
+        "task_achievement": auto_ta,
+        "organization": auto_org,
+        "accuracy": auto_acc
+    }
+
+    st.markdown("#### ⚖️ Automatic Score Breakdown")
+    col_p1, col_p2, col_p3 = st.columns(3)
+    with col_p1:
+        st.metric("Task Achievement (35%)", f"{auto_ta} pts")
+    with col_p2:
+        st.metric("Coherence & Org (35%)", f"{auto_org} pts")
+    with col_p3:
+        st.metric("Language Accuracy (30%)", f"{auto_acc} pts")
+    
+    st.caption(f"💡 Criteria points automatically scale to match your **{target_scale} pts** total score.")
+
+    st.divider()
+
+    # --- PRESET VS CUSTOM RUBRIC LOGIC ---
     if preset == "Custom Rubric Builder":
-        st.markdown("#### 🛠️ Custom Rubric Definition")
-        rubric_file = st.file_uploader("Upload Custom Rubric (.txt, .docx, .pdf)", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
+        st.markdown("#### 🛠️ Custom Rubric Uploader")
+        
+        with st.expander("ℹ️ **Guide: How to Upload & Format Custom Rubrics**", expanded=True):
+            st.markdown(f"""
+            * **Supported Files:** `.txt`, `.docx`, `.pdf`
+            * **Formatting Guidelines:**
+                * Define explicit performance bands (e.g., *Exemplary*, *Developing*, *Emerging*).
+                * List target skills clearly (e.g., *Vocabulary Range*, *Argument Logic*, *Punctuation*).
+                * The AI engine will automatically adapt your descriptors to fit the **{target_scale} pts** scale.
+            """)
+        
+        rubric_file = st.file_uploader("Upload Custom Rubric File", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
         
         custom_rubric_text = ""
         if rubric_file is not None:
             custom_rubric_text = extract_text_from_file(rubric_file)
-            st.success(f"Loaded Rubric File: **{rubric_file.name}** ({len(custom_rubric_text.split())} words)")
+            st.success(f"✅ Uploaded Custom Rubric: **{rubric_file.name}** ({len(custom_rubric_text.split())} words)")
         
         st.session_state.custom_rubric_prompt = st.text_area(
-            "Detailed Rubric Criteria / Band Descriptors:",
+            "Rubric Descriptors & Evaluation Rules:",
             value=custom_rubric_text if custom_rubric_text else st.session_state.get("custom_rubric_prompt", ""),
-            height=180,
-            placeholder="Paste specific grading criteria, point breakdowns, band descriptors, or penalty rules here..."
+            height=160,
+            placeholder="Paste custom grading rules or descriptors here..."
         )
     else:
-        st.markdown("#### 🎚️ Criterion Weight Distribution")
-        col_r1, col_r2, col_r3 = st.columns(3)
-        with col_r1:
-            w_ta = st.slider("Task Achievement / Content", 0, 50, 35, key="w_ta")
-        with col_r2:
-            w_org = st.slider("Coherence & Organization", 0, 50, 35, key="w_org")
-        with col_r3:
-            w_acc = st.slider("Language Accuracy & Grammar", 0, 50, 30, key="w_acc")
+        st.markdown(f"#### 📚 Loaded Rubric Framework: **{preset}**")
         
-        total_weight = w_ta + w_org + w_acc
-        st.caption(f"Total Weight Sum: **{total_weight} points** (Auto-scales to match **{target_scale} pts** scale during grading)")
-        
-        st.session_state.rubric_weights = {
-            "task_achievement": w_ta,
-            "organization": w_org,
-            "accuracy": w_acc
+        preloaded_descriptors = {
+            "İSTEK CEFR B1 Writing Task": "CEFR B1 Rubric: Evaluated on connected paragraph structure, basic syntactical correctness, appropriate informal/semi-formal tone, and core opinion clarity.",
+            "İSTEK CEFR B2 Writing Task": "CEFR B2 Rubric: Evaluated on complex sentence structures, precise thematic vocabulary, clear logical flow with transition markers, and strong argument cohesion.",
+            "İSTEK CEFR C1 Writing Task": "CEFR C1 Rubric: Evaluated on advanced vocabulary nuance, stylistic flexibility, sophisticated cohesive devices, and error-free complex grammar structures."
         }
+        
+        active_desc = preloaded_descriptors.get(preset, "")
+        st.info(f"**Active Criteria:** {active_desc}")
+        st.session_state.custom_rubric_prompt = active_desc
 
-    st.success("✅ Rubric configuration locked into memory! Proceed to **Batch Processing** to upload student papers.")
+    st.success(f"✅ Configuration locked! Total score scale set to **{target_scale} pts**. Proceed to **Batch Processing**.")
     
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
 with wizard_tab2:
