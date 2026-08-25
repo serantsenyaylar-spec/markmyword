@@ -1,4 +1,14 @@
 import streamlit as st
+
+# --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
+st.set_page_config(
+    page_title="Mark My Words | İSTEK", 
+    page_icon="📝", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
+
+# 1. IMPORTS
 import pandas as pd
 import os
 import json
@@ -16,58 +26,19 @@ import concurrent.futures
 from io import BytesIO
 from pydantic import BaseModel
 import plotly.express as px
-import google.generativeai as genai
 from supabase import create_client, Client
-from PyPDF2 import PdfReader
 import requests
 
 # --- FREE API INTEGRATIONS ---
-from google import genai
-from google.genai import types
+from google import genai  # Using only the new SDK
 from groq import Groq
 import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# 1. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
+# 2. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
 supabase = None
-
-def log_user_login(user_name, user_email):
-    """Logs user access to Supabase and sends an instant push notification to your phone."""
-    if st.session_state.get("session_logged"):
-        return  # Prevents duplicate notifications per session
-
-    # 1. Log to Supabase Database
-    if supabase:
-        try:
-            supabase.table("user_logs").insert({
-                "user_email": user_email,
-                "action": "User Access",
-                "details": f"Logged in as {user_name}"
-            }).execute()
-        except Exception as e:
-            print(f"Database logging error: {e}")
-
-    # 2. Send Instant Mobile Notification (ntfy.sh)
-    NTFY_TOPIC = "istek_grader_alerts_99"  # Replace with your exact topic name from Step 1
-    try:
-        requests.post(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=f"User: {user_email}\nName: {user_name}",
-            headers={
-                "Title": "🚨 App Access Alert",
-                "Priority": "high",
-                "Tags": "door,bell"
-            },
-            timeout=5
-        )
-    except Exception as e:
-        print(f"Push notification error: {e}")
-
-    # Mark session logged
-    st.session_state["session_logged"] = True
-        
 try:
     supabase_url = st.secrets.get("SUPABASE_URL")
     supabase_key = st.secrets.get("SUPABASE_KEY")
@@ -78,57 +49,52 @@ try:
 except Exception as e:
     st.sidebar.error(f"⚠️ Could not connect to Supabase: {e}")
 
-# 2. DEFINE HELPER FUNCTIONS NEXT
+# 3. DEFINE HELPER FUNCTIONS
+def log_user_login(user_name, user_email):
+    """Logs user access to Supabase and sends an instant push notification to your phone."""
+    # Use a unique session state key for logins so it doesn't collide with page loads
+    if st.session_state.get("login_notified"):
+        return  
+
+    # Log to Supabase Database
+    if supabase:
+        try:
+            supabase.table("user_logs").insert({
+                "user_email": user_email,
+                "action": "User Access",
+                "details": f"Logged in as {user_name}"
+            }).execute()
+        except Exception as e:
+            print(f"Database logging error: {e}")
+            
+    # Send Mobile Push Notification
+    try:
+        topic = "istek_grader_alerts_99"  
+        requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=f"User Alert: {user_name} ({user_email}) just logged into the app.",
+            headers={
+                "Title": "🚨 New App Login",
+                "Priority": "high",
+                "Tags": "wave,student"
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"Push notification failed: {e}")
+
+    # Mark the login as notified
+    st.session_state["login_notified"] = True
+
 def log_user_session():
     """Logs user access immediately upon page visit."""
-    # Now safe to check because supabase is guaranteed to exist
     if not supabase:
         return 
         
-    if st.session_state.get("session_logged"):
+    # Use a different key so it doesn't block the login notification
+    if st.session_state.get("page_visited"):
         return 
 
-    user_email = st.session_state.get("user_email", "teacher@istek.k12.tr")
-
-    try:
-        supabase.table("user_logs").insert({
-            "user_email": user_email,
-            "action": "User Access",
-            "details": "Opened app session"
-        }).execute()
-        st.session_state["session_logged"] = True
-    except Exception as e:
-        print(f"Error logging session: {e}")
-
-# 3. CALL LOG_USER_SESSION AFTER SUPABASE IS INITIALIZED
-log_user_session()
-
-# 2. HELPER FUNCTIONS
-
-def extract_text_from_file(uploaded_file):
-    """Extracts text from PDF, DOCX, or TXT files."""
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    try:
-        if file_extension == 'pdf':
-            reader = PdfReader(uploaded_file)
-            return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
-        elif file_extension == 'docx':
-            return docx2txt.process(uploaded_file)
-        elif file_extension == 'txt':
-            return uploaded_file.getvalue().decode("utf-8")
-        return None
-    except Exception as e:
-        st.error(f"Error reading {uploaded_file.name}: {e}")
-        return None
-
-def log_user_session():
-    """Logs user access automatically once per session by checking various session states."""
-    if not supabase:
-        return # Skip logging if DB isn't connected
-        
-    if st.session_state.get("session_logged"):
-        return # Already logged this session
-        
     # Attempt to find the user email across common keys
     user_email = None
     for key in ["user_email", "email", "user", "username"]:
@@ -148,12 +114,27 @@ def log_user_session():
             "details": "Opened app session"
         }).execute()
         
-        # Mark session as logged so we don't spam the database
-        st.session_state["session_logged"] = True
-        # Also store the active email for easy access later
+        # Mark session as logged
+        st.session_state["page_visited"] = True
         st.session_state["user_email"] = user_email 
     except Exception as e:
         print(f"Error logging session: {e}")
+
+def extract_text_from_file(uploaded_file):
+    """Extracts text from PDF, DOCX, or TXT files."""
+    file_extension = uploaded_file.name.split('.')[-1].lower()
+    try:
+        if file_extension == 'pdf':
+            reader = PdfReader(uploaded_file)
+            return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        elif file_extension == 'docx':
+            return docx2txt.process(uploaded_file)
+        elif file_extension == 'txt':
+            return uploaded_file.getvalue().decode("utf-8")
+        return None
+    except Exception as e:
+        st.error(f"Error reading {uploaded_file.name}: {e}")
+        return None
 
 def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
     """Saves evaluation records to Supabase vector memory using Student Full Name."""
@@ -172,7 +153,7 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
                 model="text-embedding-004", 
                 contents=student_text
             )
-            embedding = emb_res.embeddings[0].values # Adjusted based on typical GenAI SDK response
+            embedding = emb_res.embeddings[0].values 
 
         # Insert record into database
         supabase.table("essay_memory").insert({
@@ -190,21 +171,14 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
     except Exception as e:
         st.error(f"Could not save exemplar to database: {e}")
 
-# 3. APP EXECUTION
+
+# 4. APP EXECUTION
 
 # Call the session logger immediately when the app loads
 log_user_session()
 
 # Safely fetch user email from session state for use in the rest of your app
 USER_EMAIL = st.session_state.get("user_email")
-
-# --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
-st.set_page_config(
-    page_title="Mark My Words | İSTEK", 
-    page_icon="📝", 
-    layout="wide", 
-    initial_sidebar_state="collapsed"
-)
 
 # --- PYDANTIC SCHEMA FOR GEMINI STRUCTURED OUTPUT ---
 class GradingOutput(BaseModel):
@@ -358,59 +332,18 @@ def check_authentication():
 
     return is_admin, user_email, user_name
 
-def track_user_login():
-    # Automatically logs the user's visit/login once per session.
-    user_email = None
-    for key in ["user_email", "email", "user", "username"]:
-        if key in st.session_state and st.session_state[key]:
-            val = st.session_state[key]
-            user_email = val.get("email") if isinstance(val, dict) else str(val)
-            break
-
-    if user_email and not st.session_state.get("login_tracked_db"):
-        try:
-            supabase.table("user_logs").insert({"email": user_email}).execute()
-            st.session_state["login_tracked_db"] = True
-        except Exception:
-            pass
-
-# Set fallback values if session state isn't populated yet
-USER_NAME = st.session_state.get("user_name", "Teacher")
-USER_EMAIL = st.session_state.get("user_email", "teacher@istek.k12.tr")
-
-# Line 346
-log_user_login(USER_NAME, USER_EMAIL)
 
 # --- EXECUTE AUTHENTICATION ---
+# 1. First, check who is logging in.
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 
-USER_NAME = st.session_state.get("user_name", "Teacher")
-USER_EMAIL = st.session_state.get("user_email", "teacher@istek.k12.tr")
+# 2. Store their details securely in session state
+st.session_state["user_name"] = USER_NAME
+st.session_state["user_email"] = USER_EMAIL
+
+# 3. NOW trigger the login push notification (uses the good function from previous batch)
 log_user_login(USER_NAME, USER_EMAIL)
 
-def log_user_login(user_name, user_email):
-    """Logs user name and email access immediately upon page visit."""
-    if not supabase:
-        return
-        
-    if st.session_state.get("session_logged"):
-        return # Prevents duplicate entries per session
-
-    try:
-        supabase.table("user_logs").insert({
-            "user_email": user_email,
-            "action": "User Access",
-            "details": f"Logged in as {user_name}"
-        }).execute()
-        st.session_state["session_logged"] = True
-    except Exception as e:
-        print(f"Error logging session: {e}")
-        
-# --- LOG USER LOGIN (ONCE PER SESSION) ---
-if not st.session_state.get("user_session_logged", False):
-    st.session_state.user_session_logged = True
-    log_user_login(USER_NAME, USER_EMAIL)
-    
 # --- ENHANCED UI & CSS STYLING (DARK MODE) ---
 st.markdown("""
 <style>
@@ -523,11 +456,6 @@ default_states = {
 for key, val in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = val
-
-# --- LOG USER LOGIN (ONCE PER SESSION) ---
-if not st.session_state.get("user_session_logged", False):
-    st.session_state.user_session_logged = True
-    log_user_login(USER_NAME, USER_EMAIL)
 
 # --- GOOGLE WORKSPACE DRIVE & SHEETS ---
 def upload_file_to_drive(file_bytes, filename, folder_id, mime_type):
@@ -745,24 +673,39 @@ with col_time:
         <script>
             function updateTime() {
                 const now = new Date();
-                // Grabs the browser's local timezone automatically
                 const dateStr = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
                 const timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
                 
                 document.getElementById('client-time').innerHTML = "🕒 <b>" + dateStr + " | " + timeStr + "</b>";
             }
-            updateTime(); // Run immediately
-            setInterval(updateTime, 60000); // Update every minute
+            updateTime();
+            setInterval(updateTime, 60000);
         </script>
         """,
         height=60,
     )
 
-st.markdown("""
-<div class="stepper-container">
-    <div class="stepper-item">⚙️ Step 1: Prompt & Dynamic Rubric</div>
-    <div class="stepper-item">📤 Step 2: Live Batch Evaluation</div>
-    <div class="stepper-item">📊 Step 3: Interactive Analytics & Reports</div>
+# Active state tracking for the wizard UI
+active_1 = "active" if st.session_state.get('active_step', 1) >= 1 else ""
+active_2 = "active" if st.session_state.get('active_step', 1) >= 2 else ""
+active_3 = "active" if st.session_state.get('active_step', 1) >= 3 else ""
+
+st.markdown(f"""
+<div class="wizard-container">
+    <div class="wizard-step {active_1}">
+        <div class="wizard-icon">⚙️</div>
+        <div class="wizard-label">Step 1: Prompt & Rubric</div>
+        <div class="wizard-line"></div>
+    </div>
+    <div class="wizard-step {active_2}">
+        <div class="wizard-icon">📤</div>
+        <div class="wizard-label">Step 2: Batch Grading</div>
+        <div class="wizard-line"></div>
+    </div>
+    <div class="wizard-step {active_3}">
+        <div class="wizard-icon">📊</div>
+        <div class="wizard-label">Step 3: Analytics</div>
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -784,136 +727,13 @@ else:
     wizard_tab1, wizard_tab2, wizard_tab3 = tabs[0], tabs[1], tabs[2]
     admin_tab = None
 
-# --- TAB 1: SETUP ---
-with wizard_tab1:
-    st.markdown("#### ⚡ Quick Assignment Presets")
-    
-    default_essay_question = "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience."
-    default_para_question = "Write a 70-90 word paragraph describing your ideal morning routine before school starts. Explain why each activity helps your day."
-    
-    
-    qc1, qc2, qc3 = st.columns(3)
-    with qc1:
-        if st.button("📝 B1 Guided Essay\n(120–150 words)", use_container_width=True):
-            st.session_state.preset_template = "Guided Essay Writing (120–150 words)"
-            st.session_state.active_question = default_essay_question
-            st.session_state.custom_rubric_df = None
-            st.rerun()
-    with qc2:
-        if st.button("📄 B1 Guided Paragraph\n(70–90 words)", use_container_width=True):
-            st.session_state.preset_template = "Guided Paragraph Writing (70–90 words)"
-            st.session_state.active_question = default_para_question
-            st.session_state.custom_rubric_df = None
-            st.rerun()
-    with qc3:
-        if st.button("🎨 Custom Assignment\n(Upload Prompt & Rubric)", use_container_width=True):
-            st.session_state.preset_template = "Custom Assignment"
-            st.rerun()
-
-    st.divider()
-    col_assign1, col_assign2 = st.columns([1, 1])
-
-    with col_assign1:
-        assignment_type = st.selectbox(
-            "Assignment Type", 
-            ["Guided Essay Writing (120–150 words)", "Guided Paragraph Writing (70–90 words)", "Custom Assignment"],
-            index=0 if "Essay" in st.session_state.preset_template else (1 if "Paragraph" in st.session_state.preset_template else 2)
-        )
-
-        question_option = st.radio("Assignment Prompt Source", ["Use Preset Prompt", "Type Custom Prompt", "Upload Question File (TXT, PDF, Image)"], horizontal=True)
-
-        if question_option == "Use Preset Prompt":
-            active_q = default_essay_question if "Essay" in assignment_type else default_para_question
-        elif question_option == "Type Custom Prompt":
-            active_q = st.text_area("Enter Prompt for AI Evaluation:", value=st.session_state.active_question, height=110)
-        else:
-            q_file = st.file_uploader("Upload Question File (.txt, .pdf, .png, .jpg, .jpeg, .webp)", type=["txt", "pdf", "png", "jpg", "jpeg", "webp"])
-            if q_file:
-                q_bytes = q_file.getvalue()
-                q_mtype = mimetypes.guess_type(q_file.name)[0] or "text/plain"
-                
-                if q_file.name.endswith(".txt"):
-                    active_q = q_bytes.decode("utf-8", errors="ignore")
-                else:
-                    gemini_key = get_secret("GEMINI_API_KEY")
-                    if gemini_key:
-                        try:
-                            g_client = genai.Client(api_key=gemini_key)
-                            doc_part = types.Part.from_bytes(data=q_bytes, mime_type=q_mtype)
-                            response = g_client.models.generate_content(
-                                model="gemini-3.6-flash",
-                                contents=["Extract and transcribe the essay prompt or question text from this document/image perfectly. Return ONLY the extracted text.", doc_part]
-                            )
-                            active_q = response.text.strip()
-                        except Exception as e:
-                            st.error(f"Error reading prompt file: {str(e)}")
-                            active_q = st.session_state.active_question
-                    else:
-                        active_q = "[Uploaded Prompt File: API Key required to read image/PDF]"
-            else:
-                active_q = st.session_state.active_question
-
-        st.session_state.active_question = active_q
-        st.info(f"📌 **Active Prompt Configured:**\n\n{st.session_state.active_question}")
-
-    with col_assign2:
-        default_fn = "Rubric_GUIDED_ESSAY_WRITING_B1.csv" if "Essay" in assignment_type else "Rubric_GUIDED_PARAGRAPH_WRITING_B1.csv"
-        default_rubric_df = pd.read_csv(default_fn) if os.path.exists(default_fn) else pd.DataFrame({
-            "Criteria": ["Task Achievement", "Organization", "Grammatical Accuracy"],
-            "Max Score": [35, 35, 30],
-            "Description": ["Fulfills prompt criteria", "Logical structure", "Syntax, spelling, punctuation"]
-        })
-
-        rubric_source = st.radio("Rubric Source", ["Use Default Rubric", "Upload Custom CSV Rubric"], horizontal=True)
-
-        if rubric_source == "Upload Custom CSV Rubric" or assignment_type == "Custom Assignment":
-            with st.expander("📖 **Interactive Builder: How to Create & Upload Custom Rubrics**", expanded=True):
-                st.markdown("""
-                **Required CSV Column Layout:**
-                
-                | Criteria | Max Score | Description |
-                | :--- | :--- | :--- |
-                | `Task Achievement` | `35` | Fulfills prompt criteria and word count |
-                | `Organization` | `35` | Clear paragraphing and logical connectors |
-                | `Grammar & Vocabulary` | `30` | Accurate syntax, spelling, and word choices |
-
-                ---
-                **Step-by-Step Instructions:**
-                1. Open **Google Sheets** or **Microsoft Excel**.
-                2. Set row 1 exact header titles: **`Criteria`**, **`Max Score`**, **`Description`**.
-                3. Fill in your criteria rows and point distributions.
-                4. Go to **File ➔ Download ➔ Comma-separated values (.csv)**.
-                5. Upload your `.csv` file below.
-                """)
-                st.download_button(
-                    label="📥 Download Standard CSV Template",
-                    data="Criteria,Max Score,Description\nTask Achievement,35,Fulfills prompt requirements completely\nOrganization,35,Logical structure and sentence flow\nGrammar & Vocabulary,30,Punctuation, spelling, and sentence range",
-                    file_name="Standard_Rubric_Template.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-
-        if rubric_source == "Upload Custom CSV Rubric":
-            custom_rubric_file = st.file_uploader("Upload Custom CSV File", type=["csv"])
-            if custom_rubric_file:
-                try:
-                    st.session_state.custom_rubric_df = pd.read_csv(custom_rubric_file)
-                    st.success("✅ Custom rubric loaded!")
-                except Exception as e:
-                    st.error(f"Error reading CSV: {str(e)}")
-
-            active_base_df = st.session_state.custom_rubric_df if st.session_state.custom_rubric_df is not None else default_rubric_df
-        else:
-            st.session_state.custom_rubric_df = None
-            active_base_df = default_rubric_df
-
-        base_total = detect_max_score(active_base_df)
-        target_scale = st.number_input("Total Evaluation Scale (Target Out Of)", min_value=1, max_value=500, value=base_total, step=1)
-        st.session_state.total_rubric_scale = target_scale
-
-        scaled_rubric_df = scale_rubric_dataframe(active_base_df, target_scale)
-        st.dataframe(scaled_rubric_df, height=150, use_container_width=True)
-        st.session_state.raw_rubric = scaled_rubric_df.to_string()
+if q_file.name.endswith(".txt"):
+    active_q = q_bytes.decode("utf-8", errors="ignore")
+else:
+    # ... gemini extracts text ...
+    active_q = response.text.strip()
+# ... later ...
+st.session_state.active_question = active_q
         
 # --- TAB 2: UPLOAD & LIVE PROCESS ---
 with wizard_tab2:
@@ -932,9 +752,8 @@ with wizard_tab2:
                 for f in uploaded_files:
                     content = extract_text_from_file(f) or ""
                     
-                    # Smart auto-fill: Try guessing the name from the filename (e.g., "Ali_Yilmaz_Essay.pdf" -> "Ali Yilmaz")
+                    # Smart auto-fill: Try guessing the name from the filename
                     clean_filename = f.name.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ')
-                    # Remove common extra words if present
                     suggested_name = ' '.join([w for w in clean_filename.split() if w.lower() not in ['essay', 'writing', 'paper', 'b1', 'task']]).title()
                     
                     st.session_state.graded_batch.append({
@@ -944,18 +763,17 @@ with wizard_tab2:
                         "file_bytes": f.getvalue(),
                         "mime_type": mimetypes.guess_type(f.name)[0] or "text/plain",
                         "score": 0,
-                        "feedback": "AI evaluation draft will be generated during processing..."
+                        "feedback": "AI evaluation pending...",
+                        "evaluation_data": None
                     })
             st.success(f"✅ Loaded {len(st.session_state.graded_batch)} essays!")
 
     if "graded_batch" in st.session_state and len(st.session_state.graded_batch) > 0:
         st.markdown("---")
-        st.markdown("### 📝 Assign Names & Review Papers")
+        st.markdown("### 📝 Review Uploaded Papers & Student Names")
         
         for i, paper in enumerate(st.session_state.graded_batch):
             with st.expander(f"📄 Paper #{i+1}: {paper['student_name']} ({paper['filename']})", expanded=(i==0)):
-                
-                # Student Name & Surname Input Field
                 st.session_state.graded_batch[i]['student_name'] = st.text_input(
                     "👤 Student Name & Surname:", 
                     value=paper['student_name'], 
@@ -963,155 +781,244 @@ with wizard_tab2:
                 )
                 
                 st.markdown("**Student Text Preview:**")
-                st.info(paper['text'][:400] + "..." if len(paper['text']) > 400 else paper['text'])
-                
-        # 3. THE FINALIZE BUTTON
+                st.info(paper['text'][:400] + "..." if len(paper['text']) > 400 else (paper['text'] if paper['text'] else "[OCR / Image File - Text will be processed directly by AI]"))
+
+        # --- AI BATCH EXECUTION BUTTON ---
         st.markdown("---")
-        if st.button("💾 Finalize Batch & Train AI", type="primary", use_container_width=True):
-            with st.spinner("Saving approved grades and upgrading AI memory..."):
+        st.markdown("### 🚀 Execute AI Evaluation")
+        
+        eval_col1, eval_col2 = st.columns([2, 1])
+        with eval_col1:
+            provider = st.selectbox("Select AI Engine Provider", ["Google Gemini (Recommended)", "Groq (Llama 3)"])
+        
+        if st.button("⚡ Run Batch Grading", type="primary", use_container_width=True):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            total_papers = len(st.session_state.graded_batch)
+            
+            for idx, paper in enumerate(st.session_state.graded_batch):
+                status_text.markdown(f"⏳ **Grading paper {idx+1} of {total_papers}:** `{paper['student_name']}`...")
+                
+                user_prompt = f"""
+                <assignment_question>
+                {st.session_state.get('active_question', 'N/A')}
+                </assignment_question>
+
+                <rubric_data>
+                {st.session_state.get('raw_rubric', 'N/A')}
+                </rubric_data>
+
+                <student_submission>
+                {paper['text']}
+                </student_submission>
+                """
+                
+                if "Gemini" in provider:
+                    res = run_gemini_structured(SYSTEM_PROMPT, user_prompt, paper['file_bytes'], paper['mime_type'])
+                else:
+                    res = run_groq_structured(SYSTEM_PROMPT, user_prompt)
+                
+                if res and res.get("is_valid_submission", True):
+                    paper['score'] = res.get("total_score", 0.0)
+                    paper['feedback'] = res.get("feedback", "No feedback provided.")
+                    paper['evaluation_data'] = res
+                else:
+                    paper['score'] = 0.0
+                    paper['feedback'] = f"Rejection/Error: {res.get('rejection_reason', 'Unable to parse essay') if res else 'API Error'}"
+                
+                progress_bar.progress((idx + 1) / total_papers)
+            
+            status_text.success("🎉 All essays graded successfully!")
+            st.session_state.active_step = 3  # Move stepper state to step 3
+
+        # --- FINALIZE AND SAVE BUTTON ---
+        st.markdown("---")
+        if st.button("💾 Finalize Batch & Save Grades", use_container_width=True):
+            with st.spinner("Saving approved grades to database and Google Drive..."):
                 for paper in st.session_state.graded_batch:
                     save_teacher_exemplar(
                         student_text=paper['text'],
-                        rubric_type="Standard Essay", 
+                        rubric_type=st.session_state.get("preset_template", "Standard Essay"), 
                         teacher_score=paper['score'],      
                         teacher_feedback=paper['feedback'] 
                     )
-            st.success("Batch finalized! The AI has securely learned from your corrections.")
+            st.success("Batch finalized and saved securely!")
             st.balloons()
 
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
     t3_sub1, t3_sub2 = st.tabs(["📝 Batch Review & Grading", "📂 Student Portfolio Lookup"])
     
-   # --- FEATURE: STUDENT PORTFOLIO LOOKUP BY NAME ---
-with t3_sub2:
-    st.markdown("### 🔍 Student Progress Portfolio")
-    st.write("Search historical records by student first name or surname for parent-teacher meetings.")
-    
-    search_query = st.text_input("Enter Student First Name or Surname:", placeholder="e.g., Ali Yılmaz or Yılmaz")
-    
-    if st.button("Search Portfolio", type="primary", key="search_portfolio_btn"):
-        if not search_query.strip():
-            st.warning("Please enter a name to search.")
-        elif not supabase:
-            st.error("Database connection required.")
-        else:
-            try:
-                # Uses Supabase 'ilike' for case-insensitive partial match
-                res = supabase.table("essay_memory").select("created_at, student_name, rubric_type, ai_score, score, teacher_feedback") \
-                    .ilike("student_name", f"%{search_query.strip()}%") \
-                    .order("created_at", desc=True).execute()
-                
-                if res.data:
-                    df_port = pd.DataFrame(res.data)
-                    df_port["created_at"] = pd.to_datetime(df_port["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y")
-                    
-                    st.success(f"✅ Found {len(df_port)} past evaluation(s) matching '**{search_query}**'")
-                    
-                    # Progress Chart
-                    fig = px.line(df_port[::-1], x="created_at", y="score", color="student_name", markers=True, 
-                                  title="Student Grade Progression Over Time", labels={"created_at": "Date", "score": "Grade"})
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # History Table
-                    st.dataframe(df_port[["created_at", "student_name", "rubric_type", "score", "teacher_feedback"]], use_container_width=True, hide_index=True)
-                else:
-                    st.warning(f"No records found matching: '**{search_query}**'")
-            except Exception as e:
-                st.error(f"Error searching portfolio: {e}")
-
-    # --- BATCH REVIEW (SLIDERS & REWRITE) ---
+    # --- FEATURE: BATCH REVIEW & REWRITE ---
     with t3_sub1:
-        if not st.session_state.graded_results:
-            st.info("📌 No evaluation results yet. Process papers in Step 2.")
+        batch_data = st.session_state.get("graded_batch", [])
+        
+        if not batch_data or all(p.get("score", 0) == 0 and not p.get("evaluation_data") for p in batch_data):
+            st.info("📌 No evaluation results yet. Upload and process papers in Tab 2 to view analytics here.")
         else:
-            results = st.session_state.graded_results
-            
             st.markdown("#### 📊 Batch Class Analytics")
-            df_analytics = pd.DataFrame([{"Student ID": r["student_id"], "Final Score": r["final_score"]} for r in results])
-            st.plotly_chart(px.bar(df_analytics, x="Student ID", y="Final Score", color="Final Score", title="Class Score Distribution"), use_container_width=True)
+            
+            # Extract analytics dataset safely from batch
+            analytics_list = []
+            for paper in batch_data:
+                analytics_list.append({
+                    "Student Name": paper.get("student_name", "Unknown"),
+                    "Final Score": paper.get("score", 0.0)
+                })
+            
+            df_analytics = pd.DataFrame(analytics_list)
+            fig_bar = px.bar(
+                df_analytics, 
+                x="Student Name", 
+                y="Final Score", 
+                color="Final Score", 
+                title="Class Score Distribution",
+                labels={"Final Score": "Score", "Student Name": "Student"}
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
             st.divider()
 
-            for item in results:
-                scale_val = item["total_scale"]
-                with st.expander(f"📝 Student: {item['student_id']} | Current Score: {item['final_score']} / {scale_val}", expanded=False):
+            target_scale = st.session_state.get("total_rubric_scale", 100)
+
+            for idx, item in enumerate(batch_data):
+                student_name = item.get("student_name", f"Student #{idx+1}")
+                current_score = item.get("score", 0.0)
+                eval_data = item.get("evaluation_data") or {}
+                
+                with st.expander(f"📝 Student: {student_name} | Grade: {current_score} / {target_scale}", expanded=(idx == 0)):
                     
-                    p_res = item["res_primary"]
-                    
-                    # --- FEATURE: INTERACTIVE RUBRIC SLIDERS ---
-                    st.markdown("##### 🎚️ Fine-Tune AI Scores")
+                    # Interactive Rubric Sliders for Fine-Tuning
+                    st.markdown("##### 🎚️ Fine-Tune Criteria Scores")
                     col_s1, col_s2, col_s3 = st.columns(3)
                     
-                    # Assuming default 35/35/30 max weights for the B1 rubric
+                    # Extract individual criteria scores with safe defaults
+                    default_ta = float(eval_data.get("score_task_achievement", eval_data.get("task_achievement", 30)))
+                    default_org = float(eval_data.get("score_organization", eval_data.get("organization", 30)))
+                    default_acc = float(eval_data.get("score_accuracy", eval_data.get("accuracy", 25)))
+
                     with col_s1:
-                        new_ta = st.slider("Task Achievement", 0.0, 35.0, float(p_res.get('score_task_achievement', 0)), 0.5, key=f"ta_{item['student_id']}")
+                        new_ta = st.slider("Task Achievement", 0.0, 35.0, min(default_ta, 35.0), 0.5, key=f"ta_{idx}_{student_name}")
                     with col_s2:
-                        new_org = st.slider("Organization", 0.0, 35.0, float(p_res.get('score_organization', 0)), 0.5, key=f"org_{item['student_id']}")
+                        new_org = st.slider("Organization", 0.0, 35.0, min(default_org, 35.0), 0.5, key=f"org_{idx}_{student_name}")
                     with col_s3:
-                        new_acc = st.slider("Accuracy", 0.0, 30.0, float(p_res.get('score_accuracy', 0)), 0.5, key=f"acc_{item['student_id']}")
+                        new_acc = st.slider("Accuracy", 0.0, 30.0, min(default_acc, 30.0), 0.5, key=f"acc_{idx}_{student_name}")
                     
-                    # Auto-calculate new total based on scale factor
+                    # Calculate scaled score
                     raw_total = new_ta + new_org + new_acc
-                    adjusted_total = round((raw_total / 100) * float(scale_val), 1)
+                    adjusted_total = round((raw_total / 100.0) * float(target_scale), 1)
                     
-                    st.metric(f"Adjusted Total Grade", f"{adjusted_total} / {scale_val}")
+                    st.metric("Adjusted Total Grade", f"{adjusted_total} / {target_scale}")
                     
-                    if st.button("💾 Lock Final Grade & Save to Database", key=f"save_{item['student_id']}"):
-                        item['final_score'] = adjusted_total
-                        # Save to Google Sheets
-                        save_grade(USER_NAME, USER_EMAIL, item["student_id"], st.session_state.preset_template, adjusted_total, item.get('word_count', 0), scale_val)
-                        # Save to Supabase Memory
-                        save_teacher_exemplar(
-                            student_id=item["student_id"],
-                            student_text=item["file_bytes"].decode("utf-8", errors="ignore") if not "image" in item["mime_type"] else "Image Upload",
-                            rubric_type=st.session_state.preset_template,
-                            ai_score=item['final_score'], # original AI score
-                            teacher_score=adjusted_total,
-                            teacher_feedback=p_res.get('feedback', ''),
-                            red_pen_corrections=item.get("corrections", ""),
-                            teacher_email=USER_EMAIL
-                        )
-                        st.success("✅ Grade locked and saved to Sheets & Memory!")
+                    if st.button("💾 Lock Final Grade & Save to Database", key=f"save_{idx}_{student_name}"):
+                        item["score"] = adjusted_total
+                        
+                        user_name = st.session_state.get("user_name", "Teacher")
+                        user_email = st.session_state.get("user_email", "teacher@school.edu")
+                        
+                        # Database Persistence
+                        if "save_grade" in globals():
+                            save_grade(user_name, user_email, student_name, st.session_state.get("preset_template", "Essay"), adjusted_total, len(item.get("text", "").split()), target_scale)
+                        
+                        if "save_teacher_exemplar" in globals():
+                            save_teacher_exemplar(
+                                student_id=student_name,
+                                student_text=item.get("text", ""),
+                                rubric_type=st.session_state.get("preset_template", "Standard Essay"),
+                                ai_score=current_score,
+                                teacher_score=adjusted_total,
+                                teacher_feedback=item.get("feedback", ""),
+                                red_pen_corrections=item.get("corrections", ""),
+                                teacher_email=user_email
+                            )
+                        st.success(f"✅ Grade for {student_name} locked and saved!")
                         st.rerun()
 
-                    # --- FEATURE: ONE-CLICK MODEL ANSWER REWRITE ---
+                    # Model Answer Generation Tool
                     st.divider()
                     st.markdown("##### ✨ Teaching Tools")
-                    if st.button("✍️ Generate CEFR B1+ Model Answer from this text", key=f"rewrite_{item['student_id']}"):
-                        with st.spinner("AI is crafting the perfect model answer..."):
-                            groq_client = Groq(api_key=get_secret("GROQ_API_KEY")) if get_secret("GROQ_API_KEY") else None
-                            if groq_client:
+                    if st.button("✍️ Generate CEFR B1+ Model Answer from this text", key=f"rewrite_{idx}_{student_name}"):
+                        with st.spinner("AI is crafting the model answer..."):
+                            groq_key = get_secret("GROQ_API_KEY") if "get_secret" in globals() else None
+                            if groq_key:
                                 try:
-                                    student_text = item["file_bytes"].decode("utf-8", errors="ignore")
+                                    groq_client = Groq(api_key=groq_key)
                                     completion = groq_client.chat.completions.create(
                                         model="llama-3.3-70b-versatile",
                                         messages=[
-                                            {"role": "system", "content": "You are a master English teacher. Rewrite the student's text into a perfect CEFR B1+ essay. Fix all grammar, improve vocabulary gracefully, and maintain their original ideas and structure."},
-                                            {"role": "user", "content": student_text}
+                                            {"role": "system", "content": "You are a master English teacher. Rewrite the student's text into a exemplary CEFR B1+ essay. Fix grammar, elevate vocabulary, and preserve their core message."},
+                                            {"role": "user", "content": item.get("text", "")}
                                         ]
                                     )
                                     model_answer = completion.choices[0].message.content
                                     st.success("**Perfected B1+ Model Answer:**")
-                                    st.write(model_answer)
+                                    st.markdown(model_answer)
                                 except Exception as e:
-                                    st.error(f"Failed to generate answer: {e}")
+                                    st.error(f"Failed to generate model answer: {e}")
                             else:
-                                st.error("Groq API key missing. Cannot generate answer.")
+                                st.error("Groq API key missing in environment secrets.")
                     
                     st.divider()
-                    st.markdown("##### 📄 Original Submission & Feedback")
-                    st.warning(item.get("corrections", "No corrections found."))
-                    st.markdown(f"**Detailed Feedback:**\n{p_res.get('feedback', 'N/A')}")
+                    st.markdown("##### 📄 Original Text & Feedback")
+                    if item.get("corrections"):
+                        st.warning(item["corrections"])
+                    st.markdown(f"**Detailed Feedback:**\n\n{item.get('feedback', 'No detailed feedback generated.')}")
+
+    # --- FEATURE: STUDENT PORTFOLIO LOOKUP BY NAME ---
+    with t3_sub2:
+        st.markdown("### 🔍 Student Progress Portfolio")
+        st.write("Search historical records by student first name or surname for parent-teacher meetings.")
+        
+        search_query = st.text_input("Enter Student First Name or Surname:", placeholder="e.g., Ali Yılmaz or Yılmaz")
+        
+        if st.button("Search Portfolio", type="primary", key="search_portfolio_btn"):
+            if not search_query.strip():
+                st.warning("Please enter a name to search.")
+            elif "supabase" not in globals() or supabase is None:
+                st.error("Database connection required.")
+            else:
+                try:
+                    res = supabase.table("essay_memory").select("created_at, student_name, rubric_type, ai_score, score, teacher_feedback") \
+                        .ilike("student_name", f"%{search_query.strip()}%") \
+                        .order("created_at", desc=True).execute()
+                    
+                    if res.data:
+                        df_port = pd.DataFrame(res.data)
+                        df_port["created_at"] = pd.to_datetime(df_port["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y")
+                        
+                        st.success(f"✅ Found {len(df_port)} evaluation record(s) matching '**{search_query}**'")
+                        
+                        # Progress Line Chart
+                        fig_line = px.line(
+                            df_port[::-1], 
+                            x="created_at", 
+                            y="score", 
+                            color="student_name", 
+                            markers=True, 
+                            title="Student Grade Progression Over Time", 
+                            labels={"created_at": "Date", "score": "Grade"}
+                        )
+                        st.plotly_chart(fig_line, use_container_width=True)
+                        
+                        # History Dataframe Table
+                        st.dataframe(
+                            df_port[["created_at", "student_name", "rubric_type", "score", "teacher_feedback"]], 
+                            use_container_width=True, 
+                            hide_index=True
+                        )
+                    else:
+                        st.warning(f"No records found matching: '**{search_query}**'")
+                except Exception as e:
+                    st.error(f"Error searching portfolio: {e}")
 
 # --- TAB 4: ADMIN PANEL (VISIBLE ONLY TO ADMINS) ---
-
 if IS_ADMIN and admin_tab:
     with admin_tab:
         st.markdown("### 🛡️ Admin Dashboard")
         
         # 1. SAFELY FETCH ESSAY DATA FOR INSIGHTS & EXPORTS
         essay_data = []
-        if supabase:
+        if "supabase" in globals() and supabase:
             try:
                 res = supabase.table("essay_memory").select("*").execute()
                 essay_data = res.data or []
@@ -1120,7 +1027,7 @@ if IS_ADMIN and admin_tab:
                 
         # 2. SAFELY FETCH USER LOGS FOR ACCESS FEED
         logs_data = []
-        if supabase:
+        if "supabase" in globals() and supabase:
             try:
                 logs_res = supabase.table("user_logs").select("*").order("created_at", desc=True).limit(20).execute()
                 logs_data = logs_res.data or []
@@ -1143,13 +1050,11 @@ if IS_ADMIN and admin_tab:
             if essay_data:
                 df_insights = pd.DataFrame(essay_data)
                 
-                # Ensure numeric types for score comparison
                 if "ai_score" in df_insights.columns and "score" in df_insights.columns:
                     df_insights["ai_score"] = pd.to_numeric(df_insights["ai_score"], errors="coerce").fillna(0)
                     df_insights["score"] = pd.to_numeric(df_insights["score"], errors="coerce").fillna(0)
                     df_insights["Variance"] = df_insights["score"] - df_insights["ai_score"]
                     
-                    # Flag significant teacher overrides (±10 points)
                     high_variance = df_insights[df_insights["Variance"].abs() >= 10]
                     
                     col_i1, col_i2 = st.columns(2)
@@ -1171,7 +1076,7 @@ if IS_ADMIN and admin_tab:
                 st.divider()
                 st.markdown("#### 🔍 Common Error & Red-Pen Trends")
                 if "red_pen_corrections" in df_insights.columns:
-                    all_corrections = " ".join(df_insights["red_pen_corrections"].dropna().tolist())
+                    all_corrections = " ".join(df_insights["red_pen_corrections"].dropna().astype(str).tolist())
                     if all_corrections.strip():
                         st.text_area("Recent Red-Pen Corrections Summary", value=all_corrections[:1500], height=120, disabled=True)
                     else:
@@ -1185,18 +1090,15 @@ if IS_ADMIN and admin_tab:
             if essay_data:
                 df_audit = pd.DataFrame(essay_data)
                 
-                # Timestamp formatting to local time
                 if "created_at" in df_audit.columns:
-                    df_audit["created_at"] = pd.to_datetime(df_audit["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M")
+                    df_audit["created_at"] = pd.to_datetime(df_audit["created_at"], utc=True).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M")
                 
-                # Reorder columns cleanly
-                display_cols = [c for c in ["created_at", "teacher_email", "rubric_type", "ai_score", "score", "teacher_feedback", "essay_text"] if c in df_audit.columns]
+                display_cols = [c for c in ["created_at", "teacher_email", "rubric_type", "ai_score", "score", "teacher_feedback", "student_text"] if c in df_audit.columns]
                 st.dataframe(df_audit[display_cols], use_container_width=True, hide_index=True)
 
                 st.divider()
                 st.markdown("#### 📦 One-Click Database Export")
                 
-                # Export CSV Button safely importing datetime
                 import datetime
                 csv_export = df_audit.to_csv(index=False).encode("utf-8")
                 st.download_button(
@@ -1215,8 +1117,11 @@ if IS_ADMIN and admin_tab:
             st.markdown("#### Real-Time User Activity Feed")
             if logs_data:
                 df_logs = pd.DataFrame(logs_data)
-                df_logs["created_at"] = pd.to_datetime(df_logs["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
-                st.dataframe(df_logs[["created_at", "user_email", "action", "details"]], use_container_width=True, hide_index=True)
+                if "created_at" in df_logs.columns:
+                    df_logs["created_at"] = pd.to_datetime(df_logs["created_at"], utc=True).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
+                
+                cols = [c for c in ["created_at", "user_email", "action", "details"] if c in df_logs.columns]
+                st.dataframe(df_logs[cols], use_container_width=True, hide_index=True)
             else:
                 st.info("No active user logins recorded yet.")
 
@@ -1240,17 +1145,17 @@ if IS_ADMIN and admin_tab:
 
             with col_op2:
                 st.markdown("**Database & API Status**")
-                if supabase:
+                if "supabase" in globals() and supabase:
                     st.success("🟢 Supabase Vector DB: Connected")
                 else:
                     st.error("🔴 Supabase Vector DB: Disconnected")
 
-                gemini_check = st.secrets.get("GEMINI_API_KEY")
-                groq_check = st.secrets.get("GROQ_API_KEY")
+                gemini_check = get_secret("GEMINI_API_KEY") if "get_secret" in globals() else None
+                groq_check = get_secret("GROQ_API_KEY") if "get_secret" in globals() else None
                 
                 st.write(f"• Gemini Engine: {'🟢 Online' if gemini_check else '🔴 Key Missing'}")
                 st.write(f"• Groq Llama Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
-            
+
 # --- FOOTER ---
 st.markdown("""
     <hr>
