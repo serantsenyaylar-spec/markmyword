@@ -737,8 +737,6 @@ else:
 active_q = ""
 
 # 2. Process only when a file is actively uploaded
-if q_file is not None:
-    if q_file.name.lower().endswith(".txt"):
         # Safely read bytes and decode directly
         active_q = q_file.getvalue().decode("utf-8", errors="ignore")
     else:
