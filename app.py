@@ -67,9 +67,9 @@ def log_user_login(user_name, user_email):
         except Exception as e:
             print(f"Database logging error: {e}")
             
-    def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
+def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
     """Sends a push notification to your phone via ntfy.sh."""
-    topic = get_secret("NTFY_TOPIC")  # Unique channel name stored in secrets
+    topic = get_secret("NTFY_TOPIC")
     if topic:
         try:
             requests.post(
@@ -83,7 +83,7 @@ def log_user_login(user_name, user_email):
                 timeout=5
             )
         except Exception:
-            pass  # Fails silently so it doesn't break app execution
+            pass
             
     # Mark the login as notified
     st.session_state["login_notified"] = True
