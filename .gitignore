@@ -1,5 +1,1 @@
 .env
-git rm --cached .env
-git add .gitignore
-git commit -m "Security: Untrack .env and update gitignore"
-git push origin main
