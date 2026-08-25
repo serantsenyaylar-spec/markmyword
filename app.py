@@ -1,41 +1,38 @@
+import base64
+import concurrent.futures
+import datetime
+import html
+import io
+import json
+import logging
+import mimetypes
+import os
+import time
+import zipfile
+
+import docx2txt
+import pandas as pd
+import plotly.express as px
+import requests
 import streamlit as st
+from pydantic import BaseModel
+from pypdf import PdfReader
+from supabase import Client, create_client
 
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
-    page_title="Mark My Words | İSTEK", 
-    page_icon="📝", 
-    layout="wide", 
-    initial_sidebar_state="collapsed"
+    page_title="Mark My Words | İSTEK",
+    page_icon="📝",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
-
-# 1. IMPORTS
-import pandas as pd
-import os
-import json
-import datetime
-import base64
-import html
-import mimetypes
-import zipfile
-import io
-import docx2txt
-from pypdf import PdfReader
-import time
-import logging
-import concurrent.futures
-from io import BytesIO
-from pydantic import BaseModel
-import plotly.express as px
-from supabase import create_client, Client
-import requests
-
 # --- FREE API INTEGRATIONS ---
 from google import genai  # Using only the new SDK
-from groq import Groq
-import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+import gspread
+from groq import Groq
 
 # 2. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
 supabase = None
@@ -50,11 +47,15 @@ except Exception as e:
     st.sidebar.error(f"⚠️ Could not connect to Supabase: {e}")
 
 # 3. DEFINE HELPER FUNCTIONS
+def get_secret(key_name):
+    """Safely retrieves a secret from Streamlit's secrets dictionary."""
+    return st.secrets.get(key_name)
+
 def log_user_login(user_name, user_email):
     """Logs user access to Supabase and sends an instant push notification to your phone."""
     # Use a unique session state key for logins so it doesn't collide with page loads
     if st.session_state.get("login_notified"):
-        return  
+        return
 
     # Log to Supabase Database
     if supabase:
@@ -91,11 +92,11 @@ def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
 def log_user_session():
     """Logs user access immediately upon page visit."""
     if not supabase:
-        return 
+        return
         
     # Use a different key so it doesn't block the login notification
     if st.session_state.get("page_visited"):
-        return 
+        return
 
     # Attempt to find the user email across common keys
     user_email = None
@@ -107,7 +108,7 @@ def log_user_session():
             
     # Fallback if no email is found in session state
     if not user_email:
-        user_email = "teacher@istek.k12.tr" 
+        user_email = "teacher@istek.k12.tr"
 
     try:
         supabase.table("user_logs").insert({
@@ -118,7 +119,7 @@ def log_user_session():
         
         # Mark session as logged
         st.session_state["page_visited"] = True
-        st.session_state["user_email"] = user_email 
+        st.session_state["user_email"] = user_email
     except Exception as e:
         print(f"Error logging session: {e}")
 
@@ -152,13 +153,13 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
         if gemini_key:
             client = genai.Client(api_key=gemini_key)
             emb_res = client.models.embed_content(
-                model="text-embedding-004", 
+                model="text-embedding-004",
                 contents=student_text
             )
-            embedding = emb_res.embeddings[0].values 
+            embedding = emb_res.embeddings[0].values
 
         # Insert record into database
-        supabase.table("essay_memory").insert({
+        payload = {
             "student_name": str(student_name),
             "essay_text": student_text,
             "rubric_type": rubric_type,
@@ -166,14 +167,17 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
             "score": float(teacher_score),
             "teacher_feedback": teacher_feedback,
             "red_pen_corrections": red_pen_corrections,
-            "teacher_email": teacher_email,
-            "embedding": embedding
-        }).execute()
+            "teacher_email": teacher_email
+        }
+        
+        if embedding:
+             payload["embedding"] = embedding
+
+        supabase.table("essay_memory").insert(payload).execute()
         st.success("Exemplar successfully saved to database!")
     except Exception as e:
         st.error(f"Could not save exemplar to database: {e}")
-
-
+        
 # 4. APP EXECUTION
 
 # Call the session logger immediately when the app loads
@@ -219,7 +223,7 @@ def get_google_credentials():
     except Exception as e:
         logging.error(f"Error initializing Google credentials: {e}")
         return None
-
+        
 # --- CONFIGURATION & CONSTANTS ---
 DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
 SHEET_ID = get_secret("SHEET_ID")
@@ -263,7 +267,7 @@ def check_authentication():
     if not is_logged_in and not st.session_state.get("auth_user"):
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
         st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the portal.")
-        if st.button("Log in with Google", type="primary", use_container_width=True, key="login_btn_google"): 
+        if st.button("Log in with Google", type="primary", use_container_width=True, key="login_btn_google"):
             st.login("google")
         st.stop()
 
@@ -333,8 +337,7 @@ def check_authentication():
             st.logout()
 
     return is_admin, user_email, user_name
-
-
+    
 # --- EXECUTE AUTHENTICATION ---
 # 1. First, check who is logging in.
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
@@ -343,7 +346,7 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 st.session_state["user_name"] = USER_NAME
 st.session_state["user_email"] = USER_EMAIL
 
-# 3. NOW trigger the login push notification (uses the good function from previous batch)
+# 3. NOW trigger the login push notification
 log_user_login(USER_NAME, USER_EMAIL)
 
 # --- ENHANCED UI & CSS STYLING (DARK MODE) ---
@@ -458,7 +461,7 @@ default_states = {
 for key, val in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = val
-
+        
 # --- GOOGLE WORKSPACE DRIVE & SHEETS ---
 def upload_file_to_drive(file_bytes, filename, folder_id, mime_type):
     """Uploads the file to Google Drive using unified credentials."""
@@ -501,8 +504,10 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
     except Exception as e:
         print(f"Sheets Save Error: {e}")
         return False
-
+        
 # --- UI BADGES & HELPERS ---
+from google.genai import types
+
 def get_score_badge(score, max_score):
     """Generates a colored HTML badge for Tab 3 based on the grade percentage."""
     try:
@@ -526,7 +531,7 @@ def get_score_badge(score, max_score):
         <span style="font-size: 2rem; font-weight: bold;">{score} / {max_score}</span>
     </div>
     """
-    
+
 def scale_rubric_dataframe(df, target_scale):
     """Scales numeric rubric columns relative to a target total scale."""
     if df is None or df.empty:
@@ -621,7 +626,7 @@ def run_groq_structured(client, user_prompt, text_content):
     except Exception as e:
         print(f"[Groq Worker Error]: {str(e)}")
         return {}
-    
+        
 # --- EVALUATION RUNNERS ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
 Evaluate the student essay based STRICTLY on the provided rubric in <rubric_data> and the assignment prompt in <assignment_question>.
@@ -738,15 +743,19 @@ active_q = ""
 if q_file is not None:
     if q_file.name.lower().endswith(".txt"):
         # Safely read bytes and decode directly
-        active_q = q_file.read().decode("utf-8", errors="ignore")
+        active_q = q_file.getvalue().decode("utf-8", errors="ignore")
     else:
-        # Process PDF / DOCX with Gemini API
-        # response = client.models.generate_content(...)
-        active_q = response.text.strip()
+        # I swapped out your commented Gemini placeholder with your own 
+        # extract_text_from_file helper so the app won't crash with a NameError!
+        extracted = extract_text_from_file(q_file)
+        if extracted:
+            active_q = extracted.strip()
+        else:
+            active_q = "Could not extract text from file."
 
     # Save to session state
     st.session_state.active_question = active_q
-
+    
 # ==========================================
 # --- PRELOADED B1+ PROMPTS & RUBRICS ---
 # ==========================================
