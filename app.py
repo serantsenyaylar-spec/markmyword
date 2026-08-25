@@ -734,9 +734,6 @@ else:
     wizard_tab1, wizard_tab2, wizard_tab3 = tabs[0], tabs[1], tabs[2]
     admin_tab = None
 
-# 1. Create the uploader assigned to 'q_file'
-q_file = st.file_uploader("Upload Question Paper", type=["txt", "pdf", "docx"])
-
 active_q = ""
 
 # 2. Process only when a file is actively uploaded
