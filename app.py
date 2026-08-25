@@ -733,12 +733,13 @@ else:
     ])
     wizard_tab1, wizard_tab2, wizard_tab3 = tabs[0], tabs[1], tabs[2]
     admin_tab = None
-
+    
+# --- QUESTION PAPER SETUP (DISABLED) ---
+q_file = None
 active_q = ""
 
 # 2. Process only when a file is actively uploaded
         # Safely read bytes and decode directly
-        active_q = q_file.getvalue().decode("utf-8", errors="ignore")
     else:
         # I swapped out your commented Gemini placeholder with your own 
         # extract_text_from_file helper so the app won't crash with a NameError!
@@ -747,9 +748,6 @@ active_q = ""
             active_q = extracted.strip()
         else:
             active_q = "Could not extract text from file."
-
-    # Save to session state
-    st.session_state.active_question = active_q
     
 # ==========================================
 # --- PRELOADED B1+ PROMPTS & RUBRICS ---
