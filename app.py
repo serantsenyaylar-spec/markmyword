@@ -1160,12 +1160,22 @@ if IS_ADMIN and admin_tab:
             except Exception as e:
                 logs_data = []
 
-        # Toast alert for new logins
-        if logs_data:
-            latest_log = logs_data[0]
-            if st.session_state.get("last_seen_log_id") != latest_log.get("id"):
-                st.toast(f"🚨 **Live Access Alert:** {latest_log.get('user_email', 'User')} just opened the app!", icon="👤")
-                st.session_state.last_seen_log_id = latest_log.get("id")
+# Toast & Phone alert for new logins
+if logs_data:
+    latest_log = logs_data[0]
+    if st.session_state.get("last_seen_log_id") != latest_log.get("id"):
+        user_email = latest_log.get('user_email', 'User')
+        
+        # 1. Browser Toast Alert
+        st.toast(f"🚨 **Live Access Alert:** {user_email} just opened the app!", icon="👤")
+        
+        # 2. Instant Mobile Notification via ntfy
+        send_ntfy_alert(
+            title="App Access Alert",
+            message=f"{user_email} just opened İSTEK Grader!"
+        )
+        
+        st.session_state.last_seen_log_id = latest_log.get("id")
 
         # 3. DEFINE SUB-TABS
         admin_sub1, admin_sub2, admin_sub3 = st.tabs(["📊 Insights", "📝 Exemplars & Audit", "⚙️ System & Logs"])
