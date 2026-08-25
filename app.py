@@ -19,13 +19,32 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 from supabase import Client, create_client
 
-# --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND) ---
+# --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND EXECUTED) ---
 st.set_page_config(
     page_title="Mark My Words | İSTEK",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# --- HELPER FUNCTIONS ---
+def send_ntfy_alert(title, message):
+    ntfy_topic = "istek-grader-serant-alerts-8941"
+    
+    try:
+        requests.post(
+            f"https://ntfy.sh/{ntfy_topic}",
+            data=message.encode("utf-8"),
+            headers={
+                "Title": title,
+                "Priority": "high",
+                "Tags": "rotating_light,bust_in_silhouette"
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"ntfy notification failed: {e}")
+        
 # --- FREE API INTEGRATIONS ---
 from google import genai  # Using only the new SDK
 from google.oauth2 import service_account
