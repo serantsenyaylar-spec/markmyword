@@ -5,6 +5,8 @@ import json
 import logging
 import os
 
+logger = logging.getLogger(__name__)
+
 import docx2txt
 import pandas as pd
 import plotly.express as px
@@ -12,6 +14,7 @@ import requests
 import streamlit as st
 from pydantic import BaseModel
 from pypdf import PdfReader
+
 from supabase import Client, create_client
 
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND EXECUTED) ---
@@ -23,10 +26,10 @@ st.set_page_config(
 )
 
 # --- FREE API INTEGRATIONS ---
+import gspread
 from google import genai  # Using only the new SDK
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import gspread
 from groq import Groq
 
 # 2. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
@@ -57,25 +60,31 @@ def log_user_login(user_name, user_email):
                 "details": f"Logged in as {user_name}"
             }).execute()
         except Exception as e:
-            print(f"Database logging error: {e}")
+            logger.warning("Database logging error: %s", e)
             
 def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
     """Sends a push notification to your phone via ntfy.sh."""
     topic = get_secret("NTFY_TOPIC")
     if topic:
         try:
+            headers = {
+                "Title": title,
+                "Priority": "default",
+                "Tags": "memo,bell",
+            }
+            # Attach an auth token for protected/private ntfy topics so the
+            # topic cannot be read or spammed by unauthenticated users.
+            ntfy_token = get_secret("NTFY_TOKEN")
+            if ntfy_token:
+                headers["Authorization"] = f"Bearer {ntfy_token}"
             requests.post(
                 f"https://ntfy.sh/{topic}",
                 data=message.encode("utf-8"),
-                headers={
-                    "Title": title,
-                    "Priority": "default",
-                    "Tags": "memo,bell"
-                },
+                headers=headers,
                 timeout=5
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("ntfy alert delivery failed: %s", e)
             
     # Mark the login as notified
     st.session_state["login_notified"] = True
@@ -89,17 +98,11 @@ def log_user_session():
     if st.session_state.get("page_visited"):
         return
 
-    # Attempt to find the user email across common keys
-    user_email = None
-    for key in ["user_email", "email", "user", "username"]:
-        if key in st.session_state and st.session_state[key]:
-            val = st.session_state[key]
-            user_email = val.get("email") if isinstance(val, dict) else str(val)
-            break
-            
-    # Fallback if no email is found in session state
+    # Use the OAuth-verified identity captured by the auth gate. The hardcoded
+    # fallback was removed so anonymous visitors never write audit rows.
+    user_email = normalize_email(str(st.session_state.get("user_email") or ""))
     if not user_email:
-        user_email = "teacher@istek.k12.tr"
+        return
 
     try:
         supabase.table("user_logs").insert({
@@ -112,25 +115,62 @@ def log_user_session():
         st.session_state["page_visited"] = True
         st.session_state["user_email"] = user_email
     except Exception as e:
-        print(f"Error logging session: {e}")
+        logger.warning("Error logging session: %s", e)
+
+def _looks_like_extension(file_bytes: bytes, file_extension: str) -> bool:
+    """Validates the upload by magic bytes, not just by its filename suffix.
+
+    Returns True when the content signature matches the claimed extension.
+    TXT has no reliable signature and is always allowed.
+    """
+    signatures = {
+        "pdf": b"%PDF-",
+        "png": b"\x89PNG\r\n\x1a\n",
+        "jpg": b"\xff\xd8\xff",
+        "jpeg": b"\xff\xd8\xff",
+        "docx": b"PK\x03\x04",
+    }
+    expected = signatures.get(file_extension)
+    if expected is None:
+        return True  # txt: no signature to check
+    if file_extension == "pdf":
+        # The PDF header may appear within the first 1024 bytes of the file.
+        return expected in file_bytes[:1024]
+    return file_bytes.startswith(expected)
+
 
 def extract_text_from_file(uploaded_file):
     """Extracts text from PDF, DOCX, TXT, or image files.
 
     Images are transcribed via Gemini vision when a Gemini API key is present.
     Returns an empty string (never None) when no text can be extracted.
+    Oversized or mismatched (spoofed-extension) files are rejected up front.
     """
     if uploaded_file is None:
         return ""
+
+    # Hard per-file size cap, independent of the Streamlit server limit.
+    file_bytes = uploaded_file.getvalue()
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        st.error(
+            f"⚠️ {uploaded_file.name} is {len(file_bytes) / (1024 * 1024):.1f} MB — "
+            f"over the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB per-file limit. Skipped."
+        )
+        return ""
+
     file_extension = uploaded_file.name.split('.')[-1].lower()
+    if not _looks_like_extension(file_bytes, file_extension):
+        st.error(f"⚠️ {uploaded_file.name} does not look like a real .{file_extension} file. Skipped.")
+        return ""
+
     try:
         if file_extension == 'pdf':
-            reader = PdfReader(uploaded_file)
+            reader = PdfReader(io.BytesIO(file_bytes))
             return "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
         elif file_extension == 'docx':
-            return (docx2txt.process(uploaded_file) or "").strip()
+            return (docx2txt.process(io.BytesIO(file_bytes)) or "").strip()
         elif file_extension == 'txt':
-            return uploaded_file.getvalue().decode("utf-8", errors="ignore").strip()
+            return file_bytes.decode("utf-8", errors="ignore").strip()
         elif file_extension in ('png', 'jpg', 'jpeg'):
             return extract_text_from_image(uploaded_file)
         return ""
@@ -205,8 +245,8 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
         
 # 4. APP EXECUTION
 
-# Call the session logger immediately when the app loads
-log_user_session()
+# NOTE: Access logging intentionally happens only AFTER authentication (see
+# check_authentication below) so anonymous visitors never write audit rows.
 
 # Safely fetch user email from session state for use in the rest of your app
 USER_EMAIL = st.session_state.get("user_email")
@@ -226,9 +266,17 @@ class GradingOutput(BaseModel):
     
 # --- SECRETS & AUTH HELPERS ---
 def get_secret(key_name):
-    """Fetches secrets safely from Streamlit secrets or OS environment."""
-    if hasattr(st, "secrets") and key_name in st.secrets:
-        return st.secrets[key_name]
+    """Fetches secrets safely from Streamlit secrets or OS environment.
+
+    Falls back to the environment when no secrets.toml is configured (newer
+    Streamlit raises StreamlitSecretNotFoundError on any st.secrets access).
+    """
+    try:
+        if hasattr(st, "secrets") and key_name in st.secrets:
+            return st.secrets[key_name]
+    except Exception:
+        # No secrets file configured (or unreadable): fall back to environment.
+        logger.debug("Streamlit secrets unavailable for %s; using environment variables.", key_name)
     return os.environ.get(key_name, None)
 
 def get_google_credentials():
@@ -239,14 +287,15 @@ def get_google_credentials():
     try:
         from google.oauth2.service_account import Credentials
         creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+        # Least-privilege scopes: only files this app creates in Drive, plus
+        # the grading spreadsheet. Full drive scope was removed.
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
             "https://www.googleapis.com/auth/drive.file"
         ]
         return Credentials.from_service_account_info(creds_json, scopes=scopes)
     except Exception as e:
-        logging.error(f"Error initializing Google credentials: {e}")
+        logger.error("Error initializing Google credentials: %s", e)
         return None
         
 # --- CONFIGURATION & CONSTANTS ---
@@ -264,12 +313,22 @@ else:
 ALLOWED_DOMAIN = str(get_secret("ALLOWED_DOMAIN") or "istek.k12.tr").strip().lstrip("@")
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB per uploaded file
 
 # --- DEV-ONLY AUTH BYPASS (local testing) ---
-# Set DEV_AUTH_BYPASS=true in .streamlit/secrets.toml or the environment to
-# skip Google OAuth while running locally. The bypass identity is still
-# validated against the allowed domain / admin list before it can be used.
+# Two explicit switches must BOTH be enabled for the bypass to activate:
+#   DEV_AUTH_BYPASS=true  — the app-level toggle
+#   ALLOW_DEV_BYPASS=true — a separate deployment-level confirmation
+# This double opt-in makes it unlikely the bypass ships to production by
+# accident. The bypass identity is still validated against the allowed domain
+# / admin list before it can be used. NEVER enable both flags in a hosted
+# environment — the bypass lets anyone who reaches the app act as the
+# configured teacher account.
 DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or os.getenv("DEV_AUTH_BYPASS", "")).strip().lower() in ("true", "1", "yes", "on")
+ALLOW_DEV_BYPASS = str(get_secret("ALLOW_DEV_BYPASS") or os.getenv("ALLOW_DEV_BYPASS", "")).strip().lower() in ("true", "1", "yes", "on")
+if DEV_AUTH_BYPASS and not ALLOW_DEV_BYPASS:
+    logger.warning("DEV_AUTH_BYPASS is set but ALLOW_DEV_BYPASS is not; auth bypass disabled.")
+    DEV_AUTH_BYPASS = False
 
 # --- IDENTITY & AUTHENTICATION HELPERS ---
 def normalize_email(email):
@@ -289,10 +348,20 @@ def is_allowed_domain(email):
 def extract_user_identity():
     user_email, user_name = "", ""
     try:
-        user_email = getattr(st.user, "email", "") or st.user.get("email", "")
-        user_name = getattr(st.user, "name", "") or st.user.get("name", "")
-    except Exception:
-        pass
+        # st.experimental_user is the OAuth-verified identity (verified by
+        # Google via st.login). st.user may carry the mocked test identity.
+        _identity = getattr(st, "experimental_user", None)
+        if _identity is not None:
+            try:
+                user_email = _identity.get("email", "")
+                user_name = _identity.get("name", "")
+            except Exception as e:
+                logger.debug("Could not read experimental_user identity: %s", e)
+        if not user_email:
+            user_email = getattr(st.user, "email", "") or st.user.get("email", "")
+            user_name = getattr(st.user, "name", "") or st.user.get("name", "")
+    except Exception as e:
+        logger.debug("Could not read Streamlit user identity: %s", e)
 
     if user_email and not user_name:
         name_part = user_email.split("@")[0]
@@ -335,12 +404,12 @@ def check_authentication():
     if not is_logged_in and not st.session_state.get("auth_user"):
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
         st.markdown(f"Please log in with your **{ALLOWED_DOMAIN}** email to access the portal.")
-        if st.button("Log in with Google", type="primary", use_container_width=True, key="login_btn_google"):
+        if st.button("Log in with Google", type="primary", width="stretch", key="login_btn_google"):
             st.login("google")
         st.stop()
 
     if st.session_state.get("dev_bypass_active"):
-        st.warning("🧪 Dev-only auth bypass active — Google login skipped for local testing.")
+        st.warning("🧪 **DEV-ONLY AUTH BYPASS ACTIVE** — Google login is skipped. Anyone who can reach this server is authenticated as the configured dev teacher. Do NOT run with this flag in a hosted environment.")
 
     user_email, user_name = extract_user_identity()
     user_email = normalize_email(user_email)
@@ -349,7 +418,7 @@ def check_authentication():
 
     if not is_admin and not is_allowed_domain(user_email):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
-        if st.button("Sign out", type="primary", use_container_width=True, key="access_denied_signout_btn"):
+        if st.button("Sign out", type="primary", width="stretch", key="access_denied_signout_btn"):
             st.session_state.auth_user = None
             st.logout()
         st.stop()
@@ -377,7 +446,7 @@ def check_authentication():
 
         if is_admin:
             st.success("👑 **Admin Status: Active**")
-            if st.button("Reset Quota Counter", use_container_width=True, key="sidebar_reset_quota_btn"):
+            if st.button("Reset Quota Counter", width="stretch", key="sidebar_reset_quota_btn"):
                 st.session_state.graded_count = 0
                 st.session_state.graded_batch = []
                 st.rerun()
@@ -404,7 +473,7 @@ def check_authentication():
             """, unsafe_allow_html=True)
 
         st.divider()
-        if st.button("Log out", use_container_width=True, key="sidebar_logout_btn"):
+        if st.button("Log out", width="stretch", key="sidebar_logout_btn"):
             st.session_state.auth_user = None
             st.logout()
 
@@ -418,8 +487,9 @@ IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
 st.session_state["user_name"] = USER_NAME
 st.session_state["user_email"] = USER_EMAIL
 
-# 3. NOW trigger the login push notification
+# 3. NOW trigger the login push notification & session audit log
 log_user_login(USER_NAME, USER_EMAIL)
+log_user_session()
 
 # --- ENHANCED UI & CSS STYLING (DARK MODE) ---
 st.markdown("""
@@ -575,18 +645,31 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
 # --- AI EVALUATION HELPERS ---
 from google.genai import types
 
+
 def run_gemini_structured(client, model_name, user_prompt, student_text):
-    """Executes Gemini API and returns parsed JSON, or {} on failure."""
+    """Executes Gemini API and returns parsed JSON, or {} on failure.
+
+    The grading rules (system prompt) are passed as system_instruction so the
+    student text in the user part cannot override them (prompt-injection defense).
+    """
     if not client:
         return {}
     try:
+        system_part, sep, user_part = user_prompt.partition("<assignment_question>")
+        if sep:
+            system_instruction = system_part.strip()
+            user_content = sep + user_part
+        else:
+            system_instruction = user_prompt
+            user_content = "Grade the submission against the system instructions."
         response = client.models.generate_content(
             model=model_name,
             contents=[
-                types.Part.from_text(text=user_prompt),
+                types.Part.from_text(text=user_content),
                 types.Part.from_text(text=f"<student_submission>\n{student_text}\n</student_submission>"),
             ],
             config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
                 response_mime_type="application/json",
                 response_schema=GradingOutput,
             ),
@@ -594,7 +677,7 @@ def run_gemini_structured(client, model_name, user_prompt, student_text):
         return json.loads(response.text)
 
     except Exception as e:
-        print(f"[Gemini Worker Error] {model_name}: {str(e)}")
+        print(f"[Gemini Worker Error] {model_name}: {e!s}")
         return {}
 
 def run_groq_structured(client, user_prompt, text_content):
@@ -602,18 +685,27 @@ def run_groq_structured(client, user_prompt, text_content):
     if not client or not text_content:
         return {}
     try:
+        # Same injection defense as Gemini: grading rules go in the system
+        # message, not alongside the student-controlled text.
+        system_part, sep, user_part = user_prompt.partition("<assignment_question>")
+        if sep:
+            system_content = system_part.strip()
+            user_content = sep + user_part
+        else:
+            system_content = "You are an expert academic evaluator. Return JSON matching the expected schema."
+            user_content = user_prompt
         completion = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {"role": "system", "content": "You are an expert academic evaluator. Return JSON matching the expected schema."},
-                {"role": "user", "content": f"{user_prompt}\n\n<student_submission>\n{text_content}\n</student_submission>"}
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": f"{user_content}\n\n<student_submission>\n{text_content}\n</student_submission>"}
             ],
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
 
     except Exception as e:
-        print(f"[Groq Worker Error]: {str(e)}")
+        print(f"[Groq Worker Error]: {e!s}")
         return {}
         
 # --- EVALUATION RUNNERS ---
@@ -753,7 +845,7 @@ col_logo, col_title, col_time = st.columns([1, 3, 1], vertical_alignment="center
 
 with col_logo:
     try:
-        st.image("kurum_genel_logo_2_eng.png", use_container_width=True)
+        st.image("kurum_genel_logo_2_eng.png", width="stretch")
     except Exception:
         st.markdown("📝 **[Logo]**")
 
@@ -762,8 +854,7 @@ with col_title:
     st.markdown("### **İSTEK Schools Automated English Grader**")
 
 with col_time:
-    import streamlit.components.v1 as components
-    components.html(
+    st.html(
         """
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
@@ -790,7 +881,7 @@ with col_time:
             setInterval(updateTime, 60000);
         </script>
         """,
-        height=60,
+        unsafe_allow_javascript=True,
     )
 
 # Active state tracking for the wizard UI
@@ -930,8 +1021,20 @@ with wizard_tab1:
         st.session_state.total_rubric_scale = target_scale
 
     with col_t1b:
-        st.session_state.user_name = st.text_input("Teacher Name", value=st.session_state.get("user_name", "Teacher"))
-        st.session_state.user_email = st.text_input("Teacher Email", value=st.session_state.get("user_email", "teacher@school.edu"))
+        # Audit identity is locked to the OAuth-verified account. Keeping this
+        # read-only prevents graders from attributing work to other teachers.
+        st.text_input(
+            "Teacher Name (locked to your account)",
+            value=st.session_state.get("user_name", "Teacher"),
+            disabled=True,
+            key="locked_teacher_name",
+        )
+        st.text_input(
+            "Teacher Email (locked to your account)",
+            value=st.session_state.get("user_email", "teacher@school.edu"),
+            disabled=True,
+            key="locked_teacher_email",
+        )
 
     st.divider()
 
@@ -1010,7 +1113,7 @@ with wizard_tab2:
 
     st.divider()
     
-    if st.button("🚀 Start AI Batch Assessment", type="primary", use_container_width=True):
+    if st.button("🚀 Start AI Batch Assessment", type="primary", width="stretch"):
         if not student_files:
             st.warning("Please upload at least one student submission before evaluating.")
         elif not st.session_state.get("active_question", "").strip():
@@ -1131,7 +1234,7 @@ with wizard_tab3:
                 title="Class Score Distribution",
                 labels={"Final Score": "Score", "Student Name": "Student"}
             )
-            st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, width="stretch")
             st.divider()
 
             target_scale = st.session_state.get("total_rubric_scale", 100)
@@ -1253,12 +1356,12 @@ with wizard_tab3:
                             title="Student Grade Progression Over Time", 
                             labels={"created_at": "Date", "score": "Grade"}
                         )
-                        st.plotly_chart(fig_line, use_container_width=True)
+                        st.plotly_chart(fig_line, width="stretch")
                         
                         # History Dataframe Table
                         st.dataframe(
                             df_port[["created_at", "student_name", "rubric_type", "score", "teacher_feedback"]], 
-                            use_container_width=True, 
+                            width="stretch", 
                             hide_index=True
                         )
                     else:
@@ -1333,7 +1436,7 @@ if IS_ADMIN and admin_tab:
                         st.warning("⚠️ **Significant Score Overrides (±10+ Points):**")
                         st.dataframe(
                             high_variance[["teacher_email", "rubric_type", "ai_score", "score", "Variance", "teacher_feedback"]],
-                            use_container_width=True, hide_index=True
+                            width="stretch", hide_index=True
                         )
                     else:
                         st.success("✅ AI scoring alignment is strong. No major score overrides detected.")
@@ -1359,7 +1462,7 @@ if IS_ADMIN and admin_tab:
                     df_audit["created_at"] = pd.to_datetime(df_audit["created_at"], utc=True).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M")
 
                 display_cols = [c for c in ["created_at", "teacher_email", "rubric_type", "ai_score", "score", "teacher_feedback", "student_text"] if c in df_audit.columns]
-                st.dataframe(df_audit[display_cols], use_container_width=True, hide_index=True)
+                st.dataframe(df_audit[display_cols], width="stretch", hide_index=True)
 
                 st.divider()
                 st.markdown("#### 📦 One-Click Database Export")
@@ -1368,10 +1471,10 @@ if IS_ADMIN and admin_tab:
                 st.download_button(
                     label="📥 Export Full Database (CSV)",
                     data=csv_export,
-                    file_name=f"ISTEK_Grading_Memory_Audit_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+                    file_name=f"ISTEK_Grading_Memory_Audit_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                     type="primary",
-                    use_container_width=True
+                    width="stretch"
                 )
             else:
                 st.info("No audit records stored in database.")
@@ -1385,7 +1488,7 @@ if IS_ADMIN and admin_tab:
                     df_logs["created_at"] = pd.to_datetime(df_logs["created_at"], utc=True).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
 
                 cols = [c for c in ["created_at", "user_email", "action", "details"] if c in df_logs.columns]
-                st.dataframe(df_logs[cols], use_container_width=True, hide_index=True)
+                st.dataframe(df_logs[cols], width="stretch", hide_index=True)
             else:
                 st.info("No active user logins recorded yet.")
 
