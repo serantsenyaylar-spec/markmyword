@@ -261,11 +261,25 @@ elif isinstance(raw_admins, list):
 else:
     ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
 
-ALLOWED_DOMAIN = "istek.k12.tr"
+ALLOWED_DOMAIN = str(get_secret("ALLOWED_DOMAIN") or "istek.k12.tr").strip().lstrip("@")
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
 
 # --- IDENTITY & AUTHENTICATION HELPERS ---
+def normalize_email(email):
+    """Normalize an email address for consistent authentication checks."""
+    if not email:
+        return ""
+    return str(email).strip().lower()
+
+def is_allowed_domain(email):
+    """Return True when the email belongs to the configured allowed domain."""
+    normalized = normalize_email(email)
+    if not normalized or "@" not in normalized:
+        return False
+    domain = ALLOWED_DOMAIN.lower().lstrip("@")
+    return normalized.endswith("@" + domain)
+
 def extract_user_identity():
     user_email, user_name = "", ""
     try:
@@ -278,10 +292,11 @@ def extract_user_identity():
         name_part = user_email.split("@")[0]
         user_name = " ".join([t.capitalize() for t in name_part.split(".")])
 
+    user_email = normalize_email(user_email)
     if user_email:
         st.session_state.auth_user = {"email": user_email, "name": user_name or "Teacher User"}
     elif st.session_state.get("auth_user"):
-        user_email = st.session_state.auth_user.get("email", "")
+        user_email = normalize_email(st.session_state.auth_user.get("email", ""))
         user_name = st.session_state.auth_user.get("name", "")
 
     return user_email, user_name or "Teacher User"
@@ -297,10 +312,11 @@ def check_authentication():
         st.stop()
 
     user_email, user_name = extract_user_identity()
+    user_email = normalize_email(user_email)
     admin_list = ADMIN_EMAILS if isinstance(ADMIN_EMAILS, list) else [ADMIN_EMAILS]
-    is_admin = any(str(admin).strip().lower() == user_email.strip().lower() for admin in admin_list)
+    is_admin = any(normalize_email(admin) == user_email for admin in admin_list)
 
-    if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
+    if not is_admin and not is_allowed_domain(user_email):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
         if st.button("Sign out", type="primary", use_container_width=True, key="access_denied_signout_btn"):
             st.session_state.auth_user = None
