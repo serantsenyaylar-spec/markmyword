@@ -265,6 +265,12 @@ ALLOWED_DOMAIN = str(get_secret("ALLOWED_DOMAIN") or "istek.k12.tr").strip().lst
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
 
+# --- DEV-ONLY AUTH BYPASS (local testing) ---
+# Set DEV_AUTH_BYPASS=true in .streamlit/secrets.toml or the environment to
+# skip Google OAuth while running locally. The bypass identity is still
+# validated against the allowed domain / admin list before it can be used.
+DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or os.getenv("DEV_AUTH_BYPASS", "")).strip().lower() in ("true", "1", "yes", "on")
+
 # --- IDENTITY & AUTHENTICATION HELPERS ---
 def normalize_email(email):
     """Normalize an email address for consistent authentication checks."""
@@ -301,8 +307,30 @@ def extract_user_identity():
 
     return user_email, user_name or "Teacher User"
 
+def _dev_bypass_identity():
+    """Build a synthetic identity for local testing when bypass is enabled."""
+    email = normalize_email(
+        os.getenv("DEV_AUTH_BYPASS_EMAIL", "")
+        or get_secret("DEV_AUTH_BYPASS_EMAIL")
+        or (ADMIN_EMAILS[0] if ADMIN_EMAILS else f"teacher@{ALLOWED_DOMAIN}")
+    )
+    if not email:
+        return None
+    if not is_allowed_domain(email) and not any(normalize_email(admin) == email for admin in ADMIN_EMAILS):
+        st.warning("🧪 Dev auth bypass ignored: configured bypass email is not authorized.")
+        return None
+    name = (get_secret("DEV_AUTH_BYPASS_NAME") or os.getenv("DEV_AUTH_BYPASS_NAME") or "Dev Teacher").strip()
+    return {"email": email, "name": name or "Dev Teacher", "dev_bypass": True}
+
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
+
+    # Local testing only: seed a validated dev identity so OAuth can be skipped.
+    if DEV_AUTH_BYPASS and not st.session_state.get("auth_user"):
+        bypass_identity = _dev_bypass_identity()
+        if bypass_identity:
+            st.session_state.auth_user = bypass_identity
+            st.session_state["dev_bypass_active"] = True
 
     if not is_logged_in and not st.session_state.get("auth_user"):
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
@@ -310,6 +338,9 @@ def check_authentication():
         if st.button("Log in with Google", type="primary", use_container_width=True, key="login_btn_google"):
             st.login("google")
         st.stop()
+
+    if st.session_state.get("dev_bypass_active"):
+        st.warning("🧪 Dev-only auth bypass active — Google login skipped for local testing.")
 
     user_email, user_name = extract_user_identity()
     user_email = normalize_email(user_email)
