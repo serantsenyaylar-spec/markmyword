@@ -261,11 +261,31 @@ elif isinstance(raw_admins, list):
 else:
     ADMIN_EMAILS = ["serant.senyaylar@istek.k12.tr"]
 
-ALLOWED_DOMAIN = "istek.k12.tr"
+ALLOWED_DOMAIN = str(get_secret("ALLOWED_DOMAIN") or "istek.k12.tr").strip().lstrip("@")
 MAX_FILES_PER_BATCH = 5
 MAX_PAPERS_PER_SESSION = 15
 
+# --- DEV-ONLY AUTH BYPASS (local testing) ---
+# Set DEV_AUTH_BYPASS=true in .streamlit/secrets.toml or the environment to
+# skip Google OAuth while running locally. The bypass identity is still
+# validated against the allowed domain / admin list before it can be used.
+DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or os.getenv("DEV_AUTH_BYPASS", "")).strip().lower() in ("true", "1", "yes", "on")
+
 # --- IDENTITY & AUTHENTICATION HELPERS ---
+def normalize_email(email):
+    """Normalize an email address for consistent authentication checks."""
+    if not email:
+        return ""
+    return str(email).strip().lower()
+
+def is_allowed_domain(email):
+    """Return True when the email belongs to the configured allowed domain."""
+    normalized = normalize_email(email)
+    if not normalized or "@" not in normalized:
+        return False
+    domain = ALLOWED_DOMAIN.lower().lstrip("@")
+    return normalized.endswith("@" + domain)
+
 def extract_user_identity():
     user_email, user_name = "", ""
     try:
@@ -278,16 +298,39 @@ def extract_user_identity():
         name_part = user_email.split("@")[0]
         user_name = " ".join([t.capitalize() for t in name_part.split(".")])
 
+    user_email = normalize_email(user_email)
     if user_email:
         st.session_state.auth_user = {"email": user_email, "name": user_name or "Teacher User"}
     elif st.session_state.get("auth_user"):
-        user_email = st.session_state.auth_user.get("email", "")
+        user_email = normalize_email(st.session_state.auth_user.get("email", ""))
         user_name = st.session_state.auth_user.get("name", "")
 
     return user_email, user_name or "Teacher User"
 
+def _dev_bypass_identity():
+    """Build a synthetic identity for local testing when bypass is enabled."""
+    email = normalize_email(
+        os.getenv("DEV_AUTH_BYPASS_EMAIL", "")
+        or get_secret("DEV_AUTH_BYPASS_EMAIL")
+        or (ADMIN_EMAILS[0] if ADMIN_EMAILS else f"teacher@{ALLOWED_DOMAIN}")
+    )
+    if not email:
+        return None
+    if not is_allowed_domain(email) and not any(normalize_email(admin) == email for admin in ADMIN_EMAILS):
+        st.warning("🧪 Dev auth bypass ignored: configured bypass email is not authorized.")
+        return None
+    name = (get_secret("DEV_AUTH_BYPASS_NAME") or os.getenv("DEV_AUTH_BYPASS_NAME") or "Dev Teacher").strip()
+    return {"email": email, "name": name or "Dev Teacher", "dev_bypass": True}
+
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
+
+    # Local testing only: seed a validated dev identity so OAuth can be skipped.
+    if DEV_AUTH_BYPASS and not st.session_state.get("auth_user"):
+        bypass_identity = _dev_bypass_identity()
+        if bypass_identity:
+            st.session_state.auth_user = bypass_identity
+            st.session_state["dev_bypass_active"] = True
 
     if not is_logged_in and not st.session_state.get("auth_user"):
         st.warning("🔒 **Restricted Access:** Teacher Portal Only")
@@ -296,11 +339,15 @@ def check_authentication():
             st.login("google")
         st.stop()
 
-    user_email, user_name = extract_user_identity()
-    admin_list = ADMIN_EMAILS if isinstance(ADMIN_EMAILS, list) else [ADMIN_EMAILS]
-    is_admin = any(str(admin).strip().lower() == user_email.strip().lower() for admin in admin_list)
+    if st.session_state.get("dev_bypass_active"):
+        st.warning("🧪 Dev-only auth bypass active — Google login skipped for local testing.")
 
-    if not is_admin and not user_email.endswith(ALLOWED_DOMAIN):
+    user_email, user_name = extract_user_identity()
+    user_email = normalize_email(user_email)
+    admin_list = ADMIN_EMAILS if isinstance(ADMIN_EMAILS, list) else [ADMIN_EMAILS]
+    is_admin = any(normalize_email(admin) == user_email for admin in admin_list)
+
+    if not is_admin and not is_allowed_domain(user_email):
         st.error(f"🚫 **Access Denied:** The account **{user_email}** is not authorized.")
         if st.button("Sign out", type="primary", use_container_width=True, key="access_denied_signout_btn"):
             st.session_state.auth_user = None

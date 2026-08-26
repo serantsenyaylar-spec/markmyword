@@ -12,3 +12,4 @@ docx2txt>=0.8
 pypdf>=4.0.0
 supabase>=2.3.0
 requests>=2.31.0
+python-dotenv>=1.0.0
