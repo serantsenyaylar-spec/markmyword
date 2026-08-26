@@ -8,10 +8,15 @@ import os
 logger = logging.getLogger(__name__)
 
 import docx2txt
+import gspread
 import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from google import genai  # Using only the new SDK
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+from groq import Groq
 from pydantic import BaseModel
 from pypdf import PdfReader
 
@@ -25,24 +30,33 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# --- FREE API INTEGRATIONS ---
-import gspread
-from google import genai  # Using only the new SDK
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from groq import Groq
+def get_secret(key_name):
+    """Return a Streamlit secret or server environment variable, if configured.
+
+    Streamlit raises ``StreamlitSecretNotFoundError`` when no secrets file is
+    present, including during membership checks. Treat that expected local-dev
+    condition as "not configured" and do not reveal filesystem details to an
+    unauthenticated visitor.
+    """
+    try:
+        if key_name in st.secrets:
+            return st.secrets[key_name]
+    except Exception:
+        logger.debug("Streamlit secrets unavailable for %s; using environment variables.", key_name)
+    return os.environ.get(key_name)
+
 
 # 2. ALWAYS INITIALIZE SUPABASE AT THE TOP LEVEL
 supabase = None
 try:
-    supabase_url = st.secrets.get("SUPABASE_URL")
-    supabase_key = st.secrets.get("SUPABASE_KEY")
+    supabase_url = get_secret("SUPABASE_URL")
+    supabase_key = get_secret("SUPABASE_KEY")
     if supabase_url and supabase_key:
         supabase: Client = create_client(supabase_url, supabase_key)
     else:
-        st.sidebar.warning("⚠️ Supabase credentials missing in Streamlit secrets.")
+        logger.info("Supabase credentials are not configured; database features are disabled.")
 except Exception as e:
-    st.sidebar.error(f"⚠️ Could not connect to Supabase: {e}")
+    logger.error("Could not initialize Supabase: %s", e)
 
 # 3. DEFINE HELPER FUNCTIONS
 def log_user_login(user_name, user_email):
@@ -211,7 +225,7 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
         return
 
     try:
-        gemini_key = st.secrets.get("GEMINI_API_KEY")
+        gemini_key = get_secret("GEMINI_API_KEY")
         embedding = []
         
         # Generate embeddings if the API key is present
@@ -265,20 +279,6 @@ class GradingOutput(BaseModel):
     feedback: str
     
 # --- SECRETS & AUTH HELPERS ---
-def get_secret(key_name):
-    """Fetches secrets safely from Streamlit secrets or OS environment.
-
-    Falls back to the environment when no secrets.toml is configured (newer
-    Streamlit raises StreamlitSecretNotFoundError on any st.secrets access).
-    """
-    try:
-        if hasattr(st, "secrets") and key_name in st.secrets:
-            return st.secrets[key_name]
-    except Exception:
-        # No secrets file configured (or unreadable): fall back to environment.
-        logger.debug("Streamlit secrets unavailable for %s; using environment variables.", key_name)
-    return os.environ.get(key_name, None)
-
 def get_google_credentials():
     """Unified Google OAuth2 Service Account Credentials helper."""
     creds_secret = get_secret("gcp_service_account") or get_secret("google_credentials")
@@ -316,18 +316,18 @@ MAX_PAPERS_PER_SESSION = 15
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB per uploaded file
 
 # --- DEV-ONLY AUTH BYPASS (local testing) ---
-# Two explicit switches must BOTH be enabled for the bypass to activate:
-#   DEV_AUTH_BYPASS=true  — the app-level toggle
-#   ALLOW_DEV_BYPASS=true — a separate deployment-level confirmation
-# This double opt-in makes it unlikely the bypass ships to production by
-# accident. The bypass identity is still validated against the allowed domain
-# / admin list before it can be used. NEVER enable both flags in a hosted
-# environment — the bypass lets anyone who reaches the app act as the
-# configured teacher account.
-DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or os.getenv("DEV_AUTH_BYPASS", "")).strip().lower() in ("true", "1", "yes", "on")
-ALLOW_DEV_BYPASS = str(get_secret("ALLOW_DEV_BYPASS") or os.getenv("ALLOW_DEV_BYPASS", "")).strip().lower() in ("true", "1", "yes", "on")
-if DEV_AUTH_BYPASS and not ALLOW_DEV_BYPASS:
-    logger.warning("DEV_AUTH_BYPASS is set but ALLOW_DEV_BYPASS is not; auth bypass disabled.")
+# Three independent conditions are required. This makes a bypass accidentally
+# enabled on a hosted deployment fail closed: the deployment must be explicitly
+# marked as a local/dev/test environment *and* set both bypass switches.
+DEV_ENVIRONMENTS = frozenset({"development", "dev", "local", "test"})
+APP_ENV = str(get_secret("APP_ENV") or "").strip().lower()
+DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or "").strip().lower() in ("true", "1", "yes", "on")
+ALLOW_DEV_BYPASS = str(get_secret("ALLOW_DEV_BYPASS") or "").strip().lower() in ("true", "1", "yes", "on")
+if DEV_AUTH_BYPASS and (not ALLOW_DEV_BYPASS or APP_ENV not in DEV_ENVIRONMENTS):
+    logger.warning(
+        "DEV_AUTH_BYPASS ignored: it requires ALLOW_DEV_BYPASS and APP_ENV in %s.",
+        sorted(DEV_ENVIRONMENTS),
+    )
     DEV_AUTH_BYPASS = False
 
 # --- IDENTITY & AUTHENTICATION HELPERS ---
@@ -346,6 +346,15 @@ def is_allowed_domain(email):
     return normalized.endswith("@" + domain)
 
 def extract_user_identity():
+    # In a deliberately enabled local bypass, do not let an incidental test or
+    # stale Streamlit identity replace the validated synthetic identity.
+    if st.session_state.get("dev_bypass_active"):
+        bypass_identity = st.session_state.get("auth_user") or {}
+        return (
+            normalize_email(bypass_identity.get("email", "")),
+            bypass_identity.get("name", "") or "Dev Teacher",
+        )
+
     user_email, user_name = "", ""
     try:
         # st.experimental_user is the OAuth-verified identity (verified by
@@ -1336,8 +1345,15 @@ with wizard_tab3:
                 st.error("Database connection required.")
             else:
                 try:
-                    res = supabase.table("essay_memory").select("created_at, student_name, rubric_type, ai_score, score, teacher_feedback") \
-                        .ilike("student_name", f"%{search_query.strip()}%") \
+                    # The server-side service-role deployment bypasses database
+                    # RLS, so keep the same ownership boundary in application
+                    # code. Only administrators may search across teachers.
+                    query = supabase.table("essay_memory").select(
+                        "created_at, student_name, rubric_type, ai_score, score, teacher_feedback"
+                    )
+                    if not IS_ADMIN:
+                        query = query.eq("teacher_email", USER_EMAIL)
+                    res = query.ilike("student_name", f"%{search_query.strip()}%") \
                         .order("created_at", desc=True).execute()
                     
                     if res.data:

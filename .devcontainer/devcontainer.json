@@ -24,15 +24,14 @@
   "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
   "postCreateCommand": "python3 -m compileall app.py && echo '✅ Mark My Words compiles cleanly'",
   "postAttachCommand": {
-    "server": "streamlit run app.py --server.headless true --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "streamlit run app.py --server.headless true"
   },
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
     "STREAMLIT_SERVER_HEADLESS": "true",
     "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false",
     "STREAMLIT_SERVER_ADDRESS": "0.0.0.0",
-    "STREAMLIT_SERVER_ENABLE_CORS": "false",
-    "STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION": "false"
+    "APP_ENV": "development"
   },
   "portsAttributes": {
     "8501": {
