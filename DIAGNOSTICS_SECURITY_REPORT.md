@@ -1,135 +1,131 @@
-# Mark My Words — Diagnostics & Security Check Report
+# Mark My Words — Diagnostics & Security Check
 
-**Date:** 2026-08-26 · **Branch:** `arena/01a03d5c-markmyword` · **Target:** `app.py` (1,431 lines), `supabase/migrations/*.sql`, `requirements.txt`
-**Toolchain:** Python 3.11 · Bandit 1.9.4 · Ruff 0.16.4 · pip-audit 2.10.1 · Streamlit 1.62.0 AppTest runtime boot test
+**Run date:** 2026-08-26 (UTC)
 
----
+**Branch:** `arena/01a03e1b-markmyword`
 
-## 0. Remediation Applied (2026-08-26)
+**Scope:** `app.py`, dependency and deployment configuration, Supabase migrations, and tracked Git history
 
-All findings below were fixed, verified, and committed on this branch:
+**Toolchain:** Python 3.11.2 · Streamlit 1.62.0 · Bandit 1.9.4 · Ruff 0.16.4 · pip-audit 2.10.1
 
-| ID | Fix | Where |
-|---|---|---|
-| D1 | `get_secret()` no longer crashes when no `secrets.toml` exists — falls back to `os.environ` | `app.py` `get_secret()` |
-| D2 | Migrated all 13 `use_container_width=` call sites to `width="stretch"`; replaced deprecated `st.components.v1.html` clock with `st.html` (+ `unsafe_allow_javascript=True`) | throughout `app.py` |
-| D3 | Pinned all dependencies to exact verified versions (`==`) | `requirements.txt` |
-| H1/H2 | RLS rewritten: per-teacher policies scoped to `auth.jwt() ->> 'email'`; `anon` role revoked from both tables; docs updated for anon-key (Mode A) vs service-key (Mode B) deployment | `supabase/migrations/*.sql` |
-| H3 | Teacher name/email inputs are now read-only; audit identity locked to OAuth-verified account | `app.py` Tab 1 |
-| M1 | ntfy requests attach `Authorization: Bearer NTFY_TOKEN` when a token is configured | `app.py` `send_ntfy_alert()` |
-| M2 | Bypass now requires **two** explicit switches (`DEV_AUTH_BYPASS` + `ALLOW_DEV_BYPASS`) and shows a prominent warning when active | `app.py` + secrets template |
-| M3 | 10 MB per-file cap in app code + `server.maxUploadSize = 10` | `app.py`, `.streamlit/config.toml` |
-| M4 | Magic-byte validation of uploads (spoofed extensions rejected) | `app.py` `_looks_like_extension()` |
-| M5 | Google scopes reduced to `spreadsheets` + `drive.file` (full `drive` removed) | `app.py` `get_google_credentials()` |
-| L1 | Access logging moved after authentication; hardcoded fallback email removed; anonymous visitors write no audit rows | `app.py` |
-| L2 | Silent `except: pass` blocks now log via module logger | `app.py` |
-| L3 | Grader rules moved to `system_instruction` (Gemini) / system message (Groq) — student text can no longer override them | `app.py` AI runners |
-| L5 | tz-aware timestamps, root-logger call replaced, ruff autofixes applied (32→24, remaining are deliberate catch-alls) | `app.py` |
+## Executive summary
 
-**Post-fix verification:** Bandit 0 findings · `py_compile` OK · AppTest boot: 0 exceptions, all 9 tabs render, 0 deprecation warnings · no-secrets boot now shows the login gate instead of crashing · one-key bypass correctly refuses to activate · magic-byte validator passes 7/7 cases.
+The application passed syntax, dependency-integrity, vulnerability, secret-hygiene, and static-security checks. No known dependency vulnerabilities, Bandit findings, committed credentials, or Git object-integrity problems were found.
+
+This check also remediated four meaningful issues: unauthenticated visitors no longer receive a raw Streamlit-secrets error, development bypasses now fail closed unless the environment is explicitly local, non-admin portfolio searches are restricted to that teacher's rows, and the development container no longer disables Streamlit CORS/XSRF protections.
+
+The principal **remaining deployment risk** is the Supabase authentication model: the app's Google OAuth session is not exchanged for a Supabase JWT. Therefore, the RLS policies only apply if a separate Supabase Auth/JWT integration is added. The currently workable server-side model uses a service-role key, which bypasses RLS by design and makes the Streamlit app's authentication and authorization checks the data boundary. See [R1](#r1--supabase-authentication-model--medium) before production deployment.
 
 ---
 
-## 1. Diagnostics Summary
+## 1. Diagnostics results
 
-| Check | Result | Detail |
+| Check | Result | Evidence |
 |---|---|---|
-| Python syntax / byte-compile | ✅ PASS | `py_compile app.py` clean |
-| Runtime boot test (with secrets) | ✅ PASS | All 9 tabs render, **0 exceptions**, auth gate enforced |
-| Runtime boot test (no `secrets.toml`) | ❌ FAIL | App crashes — see D1 |
-| Security static analysis (Bandit) | 🟡 2 Low | No Medium/High findings |
-| Dependency CVE scan (pip-audit) | ✅ PASS | 0 known vulnerabilities in `requirements.txt` |
-| Hardcoded secrets scan (tree + full git history) | ✅ PASS | No API keys, tokens, or private keys found |
-| `.env` / `.streamlit/secrets.toml` hygiene | ✅ PASS | Both gitignored and absent from the repo |
-| Lint (Ruff) | 🟡 32 findings | All code-quality, none critical |
-| Deprecation check | ⚠️ WARN | 2 Streamlit APIs past their removal dates |
+| Python AST parse and byte compilation | ✅ PASS | `python -m py_compile app.py` completed successfully. |
+| Dependency installation and consistency | ✅ PASS | Exact pins installed in an isolated Python 3.11 virtual environment; `pip check` reported no broken requirements. |
+| Dependency CVE audit | ✅ PASS | `pip-audit -r requirements.txt`: **No known vulnerabilities found**. |
+| Python security SAST | ✅ PASS | `bandit -r app.py`: **0 Low / 0 Medium / 0 High** findings. |
+| Runtime — unauthenticated/no-secrets path | ✅ PASS | Streamlit `AppTest`: 0 exceptions, no raw configuration error, login gate rendered. |
+| Runtime — invalid bypass configuration | ✅ PASS | Both bypass switches with no local `APP_ENV` leave the login gate active. |
+| Runtime — explicit local bypass | ✅ PASS | `APP_ENV=development` plus both switches rendered the teacher UI with 0 exceptions and the expected validated identity. |
+| Upload type guard | ✅ PASS | Magic-byte checks passed **8/8** for PDF, DOCX, PNG, JPEG, and TXT cases. |
+| Secret hygiene | ✅ PASS | No credential-format matches in tracked source or reachable Git history; `.env` and `.streamlit/secrets.toml` are ignored. |
+| Git integrity / patch whitespace | ✅ PASS | `git fsck --no-reflogs --full` and `git diff --check` completed cleanly. |
+| Lint | 🟡 ADVISORY | Ruff reports **24** findings: 23 broad `Exception` handlers (`BLE001`) and one nested-condition simplification (`SIM102`). No correctness or security error was reported by the tool. |
+| CodeQL workflow | ✅ CONFIGURED | Python CodeQL runs on pushes/PRs to `main` and weekly. It was not run locally in this review. |
+| Dependabot configuration | ✅ FIXED | The package ecosystem was blank (invalid); it now correctly targets `pip` weekly. |
 
-### D1 — ❌ App crashes when no `secrets.toml` exists (`app.py:230`)
+### Runtime coverage and limits
 
-```python
-def get_secret(key_name):
-    if hasattr(st, "secrets") and key_name in st.secrets:   # ← raises
-        return st.secrets[key_name]
+The dynamic tests deliberately used no real credentials. They verify the login gate and local-only development pathway without sending student content or credentials to external services. This review did **not** execute a real Google OAuth login, call Gemini/Groq, access Google Drive/Sheets, connect to a production Supabase project, or apply the SQL migrations. Those integrations require a staging environment and non-production test credentials.
+
+---
+
+## 2. Security remediation applied
+
+| ID | Severity before fix | Change | Verification |
+|---|---|---|---|
+| F1 | Low — information disclosure | Moved safe secret retrieval before Supabase initialization, removed direct `st.secrets` calls from that path, and log initialization errors server-side instead of showing filesystem/configuration details to anonymous users. | No-secrets `AppTest` has 0 errors and renders only the login gate. |
+| F2 | Medium — authentication bypass misconfiguration | A bypass now requires **all three**: `APP_ENV` in `development`/`dev`/`local`/`test`, `DEV_AUTH_BYPASS=true`, and `ALLOW_DEV_BYPASS=true`. | Flags without local `APP_ENV` fail closed; explicit development configuration passes. |
+| F3 | Medium — cross-teacher PII visibility in server-role mode | Non-admin Student Portfolio queries now include `teacher_email = USER_EMAIL`; only administrators retain cross-teacher search. | Source review confirms the filter is applied before `ilike` and query execution. |
+| F4 | Low — insecure development defaults | Removed `--server.enableCORS false` and `--server.enableXsrfProtection false` plus their environment overrides from the devcontainer. | Configuration review. |
+| F5 | Operational security | Replaced blank Dependabot ecosystem with `pip`, added complete Streamlit Google OAuth keys to the untracked secret template, and replaced placeholder `SECURITY.md` content with a private reporting policy. | TOML template parsing and configuration review. |
+
+### Existing controls confirmed
+
+- Dependency versions are exact-pinned in `requirements.txt`.
+- Per-file uploads are capped at 10 MB in both Streamlit config and application code; batches are capped at 5 files and sessions at 15 papers.
+- PDF, DOCX, PNG, and JPEG uploads are checked against expected magic bytes before parsing; TXT is intentionally signature-free.
+- Google Workspace scopes are limited to `spreadsheets` and `drive.file`.
+- The app normalizes OAuth email addresses and checks the configured school domain/admin allow-list before rendering the teacher portal.
+- Audit identity inputs are disabled and persistence uses the authenticated session identity.
+- AI grader instructions are supplied as Gemini system instructions / Groq system messages; student content is structurally separated from the grading rules.
+- ntfy uses a five-second timeout and supports a bearer token for protected topics.
+- User-derived sidebar identity values are HTML-escaped; the existing `unsafe_allow_html` uses are static UI templates.
+
+---
+
+## 3. Remaining risks and required deployment decisions
+
+### R1 — Supabase authentication model — **Medium**
+
+The repository includes RLS policies based on `auth.jwt() ->> 'email'`. However, `app.py` creates a Supabase client from a project URL/key and never supplies a Supabase Auth user token. Google/Streamlit authentication by itself does not populate Supabase's `auth.jwt()` claims.
+
+Consequences:
+
+- With an **anon/publishable key**, requests run as `anon`; the migrations revoke that role and database reads/writes will fail.
+- With a **service-role key**, requests run server-side and work, but RLS is bypassed. The app's Google OAuth gate and code-level scopes are then the effective authorization boundary.
+
+The secret template now documents the only current working server-side configuration and the non-admin portfolio filter added in F3. Before a production release, choose one architecture explicitly:
+
+1. **Preferred defense-in-depth:** add a trusted Supabase Auth/JWT integration, use the anon/publishable key, and exercise the existing RLS policies with integration tests; or
+2. **Server-side service role:** retain the service-role key only in the host's server-side Streamlit secrets, never in browser JavaScript or a client build, and add staging tests for every data query/role boundary.
+
+Also confirm the actual deployment never emits `SUPABASE_KEY` in HTML, JavaScript bundles, logs, or a browser-visible environment variable.
+
+### R2 — Uploaded document resource exhaustion — **Low to Medium**
+
+The 10 MB upload cap and signature check substantially reduce risk, but a small compressed PDF/DOCX can still expand during parsing or yield excessive extracted text. The app does not currently impose PDF page, DOCX archive-uncompressed-size, or extracted-text limits.
+
+**Recommendation:** add limits before parser/model use (for example, PDF page count, DOCX archive member count and uncompressed size, and maximum extracted characters). Exercise those guards with decompression-bomb and oversized-text fixtures in a staging test.
+
+### R3 — Student data sent to third-party AI providers — **Medium privacy/compliance consideration**
+
+Student essays, names derived from file names, and teacher feedback can be sent to Gemini and/or Groq. No code vulnerability was found here, but production use requires the school's data-processing, consent, retention, and regional-transfer requirements to be confirmed. Avoid putting student identifiers in upload file names where operationally possible.
+
+### R4 — Broad exception handling — **Low maintainability/observability**
+
+Ruff's 23 `BLE001` notices are mostly boundaries around APIs, parsing, and optional integrations. They are not Bandit findings, but broad catches can mask unexpected programming errors and several still use `print()` rather than structured logging.
+
+**Recommendation:** replace them incrementally with expected SDK/network/parser exception types, emit structured logs without secrets or student text, and reserve a final broad exception only at UI boundaries.
+
+---
+
+## 4. Production readiness checklist
+
+- [ ] Configure Google OAuth in the real untracked `.streamlit/secrets.toml`: `cookie_secret`, client ID/secret, and the exact HTTPS redirect URI.
+- [ ] Keep `APP_ENV="production"`; do not set either development-bypass switch in hosted secrets.
+- [ ] Make the R1 Supabase architecture decision and test it against staging data.
+- [ ] Keep all API, OAuth, ntfy, Google service-account, and Supabase service-role credentials server-side and out of Git.
+- [ ] Use a private/protected random ntfy topic and set `NTFY_TOKEN` if notifications carry email addresses.
+- [ ] Set a deployment-level reverse-proxy/body-size limit in addition to the Streamlit 10 MB cap.
+- [ ] Add parser/text-size limits from R2 and test malicious fixture handling.
+- [ ] Add a CI job for `py_compile`, Bandit, Ruff, `pip-audit`, and the Streamlit gate tests; CodeQL and Dependabot are already configured.
+- [ ] Run a staging smoke test for OAuth, Supabase permissions, Drive/Sheets, and both AI engines before release.
+
+---
+
+## Commands used
+
+```bash
+python -m py_compile app.py
+python -m pip check
+bandit -q -r app.py
+pip-audit -r requirements.txt
+ruff check app.py
+git fsck --no-reflogs --full
+git diff --check
 ```
 
-Current Streamlit (≥1.40) raises `StreamlitSecretNotFoundError` when **no** secrets file exists — `key_name in st.secrets` triggers a parse. The top-level Supabase init catches this, but every later call to `get_secret()` (API keys, admin emails, Drive/Sheets IDs…) does not, so the app 500s on startup. **Fix:** wrap in try/except and fall back to `os.environ`.
-
-### D2 — ⚠️ Deprecated Streamlit APIs already past removal date
-
-- `use_container_width=True` — deprecated after **2025-12-31** → use `width="stretch"` (many call sites).
-- `st.components.v1.html` — deprecated after **2026-06-01** → use `st.iframe` (header clock, `app.py:765`).
-
-Both still work in Streamlit 1.62 but will break on a future upgrade.
-
-### D3 — Dependency pinning
-
-`requirements.txt` uses only lower bounds (`streamlit>=1.41.0`, `pypdf>=4.0.0`, …) with no upper bounds and no lock file. A future `pip install` can silently pull breaking versions (e.g. the Streamlit deprecations above). Consider `==` pins or a lock file.
-
----
-
-## 2. Security Findings
-
-### 🔴 HIGH
-
-**H1 — Supabase RLS allows any authenticated user to read/write all student data**
-`supabase/migrations/202608260001_init_mark_my_words.sql`:
-
-```sql
-create policy "essay_memory_select" on public.essay_memory for select to authenticated using (true);
-create policy "essay_memory_insert" on public.essay_memory for insert to authenticated with check (true);
-```
-
-`essay_memory` contains **student names, full essays, feedback, corrections and teacher emails**; `user_logs` is equally open. Any authenticated teacher in the allowed domain can read every record and insert spoofed ones. The migration's own comment admits this ("Tighten the select policy to specific admins in production"). **Fix:** restrict `select` to admin emails, add `with check (teacher_email = auth.jwt()->>'email')` on insert.
-
-**H2 — Verify which Supabase key the app uses**
-The migration comment states the app "uses its service key." If `SUPABASE_KEY` in Streamlit secrets is the **service_role** key, RLS is bypassed entirely and the app has full unrestricted database access. **Fix:** use the `anon`/publishable key with proper RLS, never the service key in a client-facing app.
-
-**H3 — Audit identity is user-editable**
-`app.py:934` lets any logged-in teacher overwrite `st.session_state.user_email` (and name) via a free-text input in Tab 1. That value is then written to `user_logs`, `essay_memory.teacher_email`, and the Google Sheet — so audit/attribution records are trivially spoofable. **Fix:** derive audit identity from `st.user.email` (OAuth-verified) and make the inputs read-only.
-
-### 🟠 MEDIUM
-
-**M1 — ntfy.sh alert topic is unauthenticated and guessable**
-`send_ntfy_alert()` posts to `https://ntfy.sh/{topic}`. ntfy topics are public by default: anyone who knows/guesses the topic can **read all access alerts (leaking user email addresses)** or push spoofed alerts to the admin's phone. **Fix:** use a long random topic name, an authenticated topic (auth token), or a self-hosted ntfy instance.
-
-**M2 — `DEV_AUTH_BYPASS` is a production backdoor if misconfigured**
-If `DEV_AUTH_BYPASS=true` ever lands in production secrets, anyone who reaches the app is silently authenticated as the bypass teacher (the bypass identity is validated, but only against a static email). **Fix:** hard-guard — refuse bypass unless running in a local/dev environment, and log a prominent warning when active (currently only a small sidebar banner).
-
-**M3 — No file-size limits; relies on Streamlit's 200 MB default**
-Batch uploads accept up to 5 files with no per-file cap; `.streamlit/config.toml` does not set `server.maxUploadSize`. On a shared server this enables memory/CPU DoS via large PDFs/DOCX (including decompression bombs) before any AI call. **Fix:** set `server.maxUploadSize` (e.g. 10 MB) and/or reject oversized files in `extract_text_from_file`.
-
-**M4 — File type trusted by extension only**
-`extract_text_from_file()` branches on the filename suffix. A file with a spoofed extension goes straight into `pypdf`/`docx2txt`/Gemini. Low impact today (parsers are defensive), but magic-byte/type validation would harden the pipeline.
-
-**M5 — Over-broad Google service-account scopes**
-`get_google_credentials()` requests full `drive` and `spreadsheets` scopes. **Fix:** restrict to `drive.file` (+ `spreadsheets`). Also the Sheets fallback `client.open("İstek_Schools_Grading_Database")` opens by name — prefer the `SHEET_ID`.
-
-### 🟡 LOW
-
-- **L1 — Pre-auth logging with hardcoded identity:** `log_user_session()` runs before the auth gate and inserts `teacher@istek.k12.tr` as a fallback, so anonymous visitors generate DB rows (log spam / minor write-amplification). Move logging after authentication and use the real identity.
-- **L2 — Silent exception swallowing (Bandit B110 ×2):** `try/except: pass` around the ntfy POST (`app.py:77`) and `st.user` extraction (`app.py:294`) hides failures; add logging.
-- **L3 — AI prompt-injection hardening:** the anti-injection warning is shipped as a user `Part` inside `contents`, not as `system_instruction`. A crafted essay could attempt to override the grader. **Fix:** pass `config=GenerateContentConfig(system_instruction=SYSTEM_PROMPT, ...)`. (The existing warning line and the `<student_submission>` tagging are good — make them structural.)
-- **L4 — Devcontainer disables XSRF protection & CORS** (`--server.enableXsrfProtection false`). Acceptable for local dev only; do not replicate these flags in any production config.
-- **L5 — Ruff code-quality findings (32):** blind `except Exception` (17), import ordering, tz-naive `datetime.now()`, unnecessary dict checks. No security impact, worth a cleanup pass.
-
-### ✅ Confirmed good practices
-
-- Secrets never committed (verified across full git history); `.env`/`secrets.toml` gitignored.
-- `html.escape()` applied to user-derived name/email in the sidebar; `st.markdown` used without `unsafe_allow_html` for AI output.
-- Auth gate rejects non-domain accounts (verified in runtime test).
-- Batch quota limits (5 files/batch, 15 papers/session) exist and are enforced.
-- Outbound ntfy request has a 5 s timeout; API errors are caught per-engine with Groq fallback.
-
----
-
-## 3. Recommended Priority Order
-
-All items below have been implemented (see §0 Remediation Applied).
-
-1. **H1/H2:** Lock down Supabase RLS + confirm anon key (student PII exposure). ✅
-2. **D1:** Fix `get_secret()` crash for missing secrets file. ✅
-3. **M2:** Harden `DEV_AUTH_BYPASS` guard before any production deploy. ✅
-4. **H3 + L1:** Use OAuth-verified identity for all audit writes. ✅
-5. **M1:** Protect the ntfy topic. ✅
-6. **M3/M4:** Add upload size limits & type validation. ✅
-7. **D2:** Migrate off deprecated Streamlit APIs. ✅
+Dynamic checks used `streamlit.testing.v1.AppTest` for the unauthenticated gate, a fail-closed bypass configuration, and an explicitly local bypass configuration. Credential-format scans covered tracked source and reachable Git history.
