@@ -1,0 +1,21 @@
+# Default: normalize all text files to LF in the repository.
+* text=auto eol=lf
+
+# Keep shell-style scripts LF.
+*.sh text eol=lf
+
+# Keep Windows-style files untouched when it matters.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary/generated assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.ttf binary
+*.otf binary
+
