@@ -14,6 +14,7 @@ import plotly.express as px
 import requests
 import streamlit as st
 from google import genai  # Using only the new SDK
+from google.genai import types
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from groq import Groq
@@ -60,12 +61,11 @@ except Exception as e:
 
 # 3. DEFINE HELPER FUNCTIONS
 def log_user_login(user_name, user_email):
-    """Logs user access to Supabase and sends an instant push notification to your phone."""
-    # Use a unique session state key for logins so it doesn't collide with page loads
+    """Writes one login audit row per session, after the auth gate succeeded."""
+    # Run-once guard so Streamlit reruns never duplicate the login audit row.
     if st.session_state.get("login_notified"):
         return
 
-    # Log to Supabase Database
     if supabase:
         try:
             supabase.table("user_logs").insert({
@@ -73,9 +73,13 @@ def log_user_login(user_name, user_email):
                 "action": "User Access",
                 "details": f"Logged in as {user_name}"
             }).execute()
+            st.session_state["login_notified"] = True
         except Exception as e:
             logger.warning("Database logging error: %s", e)
-            
+    else:
+        # No database configured; nothing to audit, but stop re-checking each run.
+        st.session_state["login_notified"] = True
+
 def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
     """Sends a push notification to your phone via ntfy.sh."""
     topic = get_secret("NTFY_TOPIC")
@@ -99,9 +103,6 @@ def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
             )
         except Exception as e:
             logger.warning("ntfy alert delivery failed: %s", e)
-            
-    # Mark the login as notified
-    st.session_state["login_notified"] = True
 
 def log_user_session():
     """Logs user access immediately upon page visit."""
@@ -600,7 +601,7 @@ default_states = {
     "graded_count": 0,
     "graded_batch": [],
     "auth_user": None,
-    "preset_template": "Guided Essay Writing (120–150 words)",
+    "preset_template": "Guided Paragraph Writing (B1+)",
     "active_question": "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience.",
     "total_rubric_scale": 100,
 }
@@ -653,9 +654,6 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
         return False
         
 # --- AI EVALUATION HELPERS ---
-from google.genai import types
-
-
 def run_gemini_structured(client, model_name, user_prompt, student_text):
     """Executes Gemini API and returns parsed JSON, or {} on failure.
 
