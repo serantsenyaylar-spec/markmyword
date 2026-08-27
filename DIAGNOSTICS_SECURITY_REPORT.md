@@ -96,6 +96,13 @@ Student essays, names derived from file names, and teacher feedback can be sent 
 
 Note that scanned or handwritten submissions are additionally sent to Gemini as **page images** (`application/pdf` / `image/*`) for transcription, so the original scanned paper — including any handwritten name on it — leaves the school's environment, not just the extracted text. The transcription call uses a system instruction that forbids following instructions embedded in the student's paper, keeping the same prompt-injection boundary as the grading calls.
 
+The learning loop (`transcript_corrections` and grading calibration) adds two further considerations:
+
+- **Correction glossary.** Teacher-verified handwriting fixes — which routinely contain student names — are stored in `transcript_corrections` and replayed into later transcription prompts. Rows are scoped by `teacher_email` (and optionally `class_tag`), with RLS policies mirroring `essay_memory`, so one teacher's glossary is never visible to another. Because these entries are sent to Gemini with each scanned paper, student names may be transmitted even when the current paper does not contain them.
+- **Grading calibration.** `build_calibration_text` reads back previously graded essays belonging to the same teacher and includes short excerpts as few-shot examples. Excerpts are capped (`CALIBRATION_EXCERPT_CHARS`) and limited to `MAX_CALIBRATION_EXAMPLES`, but this does mean one student's past work can appear in the prompt used to grade another student. Teachers who need strict per-student isolation can disable calibration from the sidebar.
+
+Neither mechanism trains or fine-tunes a model: no student data is used to update model weights, and nothing is shared outside the teacher's own records.
+
 ### R4 — Broad exception handling — **Low maintainability/observability**
 
 Ruff's 23 `BLE001` notices are mostly boundaries around APIs, parsing, and optional integrations. They are not Bandit findings, but broad catches can mask unexpected programming errors and several still use `print()` rather than structured logging.

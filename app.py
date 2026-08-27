@@ -199,8 +199,12 @@ Rules:
 
 
 @st.cache_data(show_spinner=False, max_entries=32, ttl=3600)
-def _transcribe_document_bytes(file_bytes: bytes, mime_type: str):
+def _transcribe_document_bytes(file_bytes: bytes, mime_type: str, glossary: str = ""):
     """Transcribes a scanned document or image via Gemini vision.
+
+    ``glossary`` carries teacher-verified corrections from earlier papers (see
+    build_transcription_glossary). It is part of the cache key, so adding a
+    correction correctly invalidates the cached transcript for a re-run.
 
     Returns ``(text, error_code)``. Cached on the file bytes so Streamlit's
     reruns (every widget interaction re-executes the script) never re-bill the
@@ -210,13 +214,17 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str):
     if not gemini_key:
         return "", "no_key"
 
+    prompt = TRANSCRIPTION_PROMPT
+    if glossary:
+        prompt = f"{TRANSCRIPTION_PROMPT}\n{glossary}"
+
     try:
         client = genai.Client(api_key=gemini_key)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                types.Part.from_text(text=TRANSCRIPTION_PROMPT),
+                types.Part.from_text(text=prompt),
             ],
             config=types.GenerateContentConfig(
                 system_instruction=TRANSCRIPTION_SYSTEM_INSTRUCTION,
@@ -232,6 +240,258 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str):
     if not text or NO_TEXT_SENTINEL in text:
         return "", "blank"
     return text, ""
+
+
+# --- LEARNING LOOP: HANDWRITING GLOSSARY -----------------------------------
+# Gemini cannot be fine-tuned through the public API (Google removed tuning
+# support in May 2025 and Gemini 3.x tuning is Vertex-enterprise only), and a
+# few hundred school papers is far too little data to train an OCR model from
+# scratch anyway. What genuinely works at this scale is retrieval: remember the
+# corrections a teacher has already made and feed them back into the next
+# prompt. The model then stops repeating the same mistakes on names and
+# class-specific vocabulary — the errors that actually recur.
+MAX_GLOSSARY_ENTRIES = 40
+
+
+def _safe_cache_clear(cached_fn):
+    """Clears a Streamlit cache without letting that failure mask a real save.
+
+    The data write has already succeeded by the time this is called; a stale
+    cache is a much smaller problem than reporting a false save error.
+    """
+    try:
+        cached_fn.clear()
+    except Exception as e:
+        logger.debug("Cache clear skipped: %s", e)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def _fetch_transcript_corrections(teacher_email: str, class_tag: str):
+    """Loads this teacher's verified handwriting corrections (most-hit first)."""
+    if not supabase or not teacher_email:
+        return []
+    try:
+        query = supabase.table("transcript_corrections").select(
+            "wrong_text, right_text, hit_count, class_tag"
+        ).eq("teacher_email", teacher_email)
+        if class_tag:
+            query = query.eq("class_tag", class_tag)
+        res = query.order("hit_count", desc=True).limit(MAX_GLOSSARY_ENTRIES).execute()
+        return res.data or []
+    except Exception as e:
+        logger.warning("Could not load transcript corrections: %s", e)
+        return []
+
+
+def build_transcription_glossary(teacher_email: str, class_tag: str) -> str:
+    """Turns stored corrections into a prompt fragment for the transcriber."""
+    rows = _fetch_transcript_corrections(teacher_email, class_tag)
+    if not rows:
+        return ""
+
+    lines = []
+    for row in rows:
+        wrong = str(row.get("wrong_text") or "").strip()
+        right = str(row.get("right_text") or "").strip()
+        if wrong and right:
+            lines.append(f'- Handwriting that looks like "{wrong}" is almost always "{right}".')
+
+    if not lines:
+        return ""
+
+    return (
+        "\nKNOWN HANDWRITING IN THIS CLASS\n"
+        "A teacher has previously verified these readings from the same students. "
+        "Apply them when the handwriting matches, but never let them override what "
+        "is clearly written on the page:\n" + "\n".join(lines) + "\n"
+    )
+
+
+def _diff_corrections(original: str, corrected: str, max_pairs: int = 12):
+    """Extracts (wrong -> right) phrase pairs from a teacher's transcript edit.
+
+    Uses difflib to find replaced spans, so only the words the teacher actually
+    changed are learned — not the whole essay.
+    """
+    import difflib
+    import re
+
+    if not original or not corrected or original == corrected:
+        return []
+
+    old_words = original.split()
+    new_words = corrected.split()
+
+    pairs = []
+    matcher = difflib.SequenceMatcher(a=old_words, b=new_words, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "replace":
+            continue
+        wrong = " ".join(old_words[i1:i2]).strip()
+        right = " ".join(new_words[j1:j2]).strip()
+
+        # Keep only short, glossary-sized fixes. A long replaced span is the
+        # teacher rewriting content, not correcting a misread word.
+        if not wrong or not right:
+            continue
+        if len(wrong.split()) > 4 or len(right.split()) > 4:
+            continue
+        if len(wrong) > 60 or len(right) > 60:
+            continue
+        # Ignore pure punctuation/case noise: it teaches the model nothing.
+        norm = lambda s: re.sub(r"[^\w]", "", s).lower()
+        if norm(wrong) == norm(right):
+            continue
+        pairs.append((wrong, right))
+        if len(pairs) >= max_pairs:
+            break
+
+    return pairs
+
+
+def save_transcript_corrections(teacher_email: str, class_tag: str, source_file: str,
+                                original: str, corrected: str) -> int:
+    """Persists a teacher's transcript fixes so future papers read better.
+
+    Returns the number of correction pairs learned.
+    """
+    pairs = _diff_corrections(original, corrected)
+    if not pairs or not supabase or not teacher_email:
+        return 0
+
+    learned = 0
+    for wrong, right in pairs:
+        try:
+            existing = supabase.table("transcript_corrections").select("id, hit_count") \
+                .eq("teacher_email", teacher_email) \
+                .eq("class_tag", class_tag or "") \
+                .eq("wrong_text", wrong).eq("right_text", right).limit(1).execute()
+
+            if existing.data:
+                row = existing.data[0]
+                supabase.table("transcript_corrections").update(
+                    {"hit_count": int(row.get("hit_count", 1)) + 1}
+                ).eq("id", row["id"]).execute()
+            else:
+                supabase.table("transcript_corrections").insert({
+                    "teacher_email": teacher_email,
+                    "class_tag": class_tag or "",
+                    "source_file": source_file,
+                    "wrong_text": wrong,
+                    "right_text": right,
+                }).execute()
+            learned += 1
+        except Exception as e:
+            logger.warning("Could not save transcript correction: %s", e)
+
+    if learned:
+        # New glossary entries must reach the next transcription immediately.
+        _safe_cache_clear(_fetch_transcript_corrections)
+    return learned
+
+
+# --- LEARNING LOOP: GRADING CALIBRATION ------------------------------------
+# essay_memory already stored an embedding for every locked grade, but nothing
+# ever read it back, so saving exemplars had no effect on future grading. These
+# helpers close that loop: the most similar past essays THAT THE TEACHER GRADED
+# are shown to the grader as worked examples of this teacher's standard.
+MAX_CALIBRATION_EXAMPLES = 3
+CALIBRATION_EXCERPT_CHARS = 700
+
+
+def _cosine_similarity(a, b) -> float:
+    """Plain-Python cosine similarity (avoids a numpy dependency)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _embed_text(text: str):
+    """Embeds text with the same model used when exemplars are saved."""
+    gemini_key = get_secret("GEMINI_API_KEY")
+    if not gemini_key or not text.strip():
+        return []
+    try:
+        client = genai.Client(api_key=gemini_key)
+        res = client.models.embed_content(model="gemini-embedding-001", contents=text)
+        return list(res.embeddings[0].values)
+    except Exception as e:
+        logger.warning("Could not embed text for calibration: %s", e)
+        return []
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def _fetch_graded_exemplars(teacher_email: str, rubric_type: str):
+    """Loads this teacher's previously locked grades for calibration."""
+    if not supabase or not teacher_email:
+        return []
+    try:
+        res = supabase.table("essay_memory").select(
+            "essay_text, score, teacher_feedback, red_pen_corrections, embedding, rubric_type"
+        ).eq("teacher_email", teacher_email).eq("rubric_type", rubric_type) \
+            .order("created_at", desc=True).limit(100).execute()
+        return res.data or []
+    except Exception as e:
+        logger.warning("Could not load graded exemplars: %s", e)
+        return []
+
+
+def build_calibration_text(student_text: str, teacher_email: str, rubric_type: str) -> str:
+    """Builds a few-shot block of this teacher's own past marking decisions.
+
+    Returns "" when there is no usable history, so a first-time user is
+    unaffected.
+    """
+    rows = _fetch_graded_exemplars(teacher_email, rubric_type)
+    if not rows:
+        return ""
+
+    query_vec = _embed_text(student_text)
+
+    scored = []
+    for row in rows:
+        essay = str(row.get("essay_text") or "").strip()
+        if not essay or row.get("score") is None:
+            continue
+        emb = row.get("embedding")
+        sim = _cosine_similarity(query_vec, emb) if (query_vec and isinstance(emb, list)) else 0.0
+        scored.append((sim, row, essay))
+
+    if not scored:
+        return ""
+
+    # With embeddings we pick the closest essays; without them we still fall
+    # back to the most recent ones, which is better than no calibration.
+    scored.sort(key=lambda t: t[0], reverse=True)
+    chosen = scored[:MAX_CALIBRATION_EXAMPLES]
+
+    blocks = []
+    for sim, row, essay in chosen:
+        excerpt = essay[:CALIBRATION_EXCERPT_CHARS]
+        feedback = str(row.get("teacher_feedback") or "").strip()[:400]
+        blocks.append(
+            f"<example>\n"
+            f"<essay>{excerpt}</essay>\n"
+            f"<teacher_final_score>{row.get('score')}</teacher_final_score>\n"
+            f"<teacher_feedback>{feedback}</teacher_feedback>\n"
+            f"</example>"
+        )
+
+    return (
+        "<teacher_calibration>\n"
+        "These are essays this same teacher graded previously, with the final score "
+        "they awarded after reviewing the AI's suggestion. Use them to match this "
+        "teacher's severity and feedback style. They are reference points for "
+        "standard-setting only — grade the new submission on its own merits against "
+        "the rubric, and never copy their content.\n"
+        + "\n".join(blocks) +
+        "\n</teacher_calibration>"
+    )
 
 
 def _report_transcription_error(filename: str, error_code: str):
@@ -296,11 +556,19 @@ def _extract_text_from_pdf(file_bytes: bytes, filename: str) -> str:
         )
         return text
 
+    glossary = build_transcription_glossary(
+        st.session_state.get("user_email", ""),
+        st.session_state.get("active_class_tag", ""),
+    )
+
     with st.spinner(f"✍️ Reading handwriting in {filename}…"):
-        transcript, error_code = _transcribe_document_bytes(file_bytes, "application/pdf")
+        transcript, error_code = _transcribe_document_bytes(file_bytes, "application/pdf", glossary)
 
     if transcript:
-        st.caption(f"✍️ {filename}: handwriting/scan transcribed by AI vision ({len(transcript.split())} words).")
+        note = f"✍️ {filename}: handwriting/scan transcribed by AI vision ({len(transcript.split())} words)."
+        if glossary:
+            note += " Applied your saved handwriting corrections."
+        st.caption(note)
         return transcript
 
     _report_transcription_error(filename, error_code)
@@ -352,21 +620,34 @@ def extract_text_from_image(uploaded_file):
     ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
     mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
 
+    glossary = build_transcription_glossary(
+        st.session_state.get("user_email", ""),
+        st.session_state.get("active_class_tag", ""),
+    )
+
     with st.spinner(f"✍️ Reading handwriting in {uploaded_file.name}…"):
-        transcript, error_code = _transcribe_document_bytes(uploaded_file.getvalue(), mime)
+        transcript, error_code = _transcribe_document_bytes(uploaded_file.getvalue(), mime, glossary)
 
     if transcript:
-        st.caption(
+        note = (
             f"✍️ {uploaded_file.name}: handwriting/scan transcribed by AI vision "
             f"({len(transcript.split())} words)."
         )
+        if glossary:
+            note += " Applied your saved handwriting corrections."
+        st.caption(note)
         return transcript
 
     _report_transcription_error(uploaded_file.name, error_code)
     return ""
 
-def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email=""):
-    """Saves evaluation records to Supabase vector memory using Student Full Name."""
+def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email="", class_tag="", was_handwritten=False):
+    """Saves evaluation records to Supabase vector memory using Student Full Name.
+
+    The stored embedding + final teacher score are what build_calibration_text
+    later reads back, so each locked grade makes future grading more aligned
+    with this teacher's standard.
+    """
     if not supabase:
         st.error("Database connection missing. Cannot save exemplar.")
         return
@@ -394,14 +675,18 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
             "score": float(teacher_score),
             "teacher_feedback": teacher_feedback,
             "red_pen_corrections": red_pen_corrections,
-            "teacher_email": teacher_email
+            "teacher_email": teacher_email,
+            "class_tag": class_tag or "",
+            "was_handwritten": bool(was_handwritten),
         }
         
         if embedding:
              payload["embedding"] = embedding
 
         supabase.table("essay_memory").insert(payload).execute()
-        st.success("Exemplar successfully saved to database!")
+        # This new exemplar must be visible to the next calibration lookup.
+        _safe_cache_clear(_fetch_graded_exemplars)
+        st.success("Exemplar saved — future grading will calibrate against it.")
     except Exception as e:
         st.error(f"Could not save exemplar to database: {e}")
         
@@ -611,6 +896,18 @@ def check_authentication():
             st.info(f"📊 **Session Usage:** {st.session_state.get('graded_count', 0)}/{MAX_PAPERS_PER_SESSION} papers")
 
         st.divider()
+
+        st.markdown("### 🧠 **Learning**")
+        st.checkbox(
+            "Calibrate grading to my past marks",
+            key="use_calibration",
+            help=(
+                "Shows the AI essays you graded before, so it matches your severity "
+                "instead of a generic standard. Turn off to grade with the rubric alone."
+            ),
+        )
+
+        st.divider()
         
         st.markdown("### 🌐 **Workspace Links**")
         workspace_links = [
@@ -750,6 +1047,9 @@ default_states = {
     "preset_template": "Guided Paragraph Writing (B1+)",
     "active_question": "Write a 120-150 word guided essay discussing how technology influences modern student communication. Include examples from your personal school experience.",
     "total_rubric_scale": 100,
+    # Learning loop
+    "active_class_tag": "",
+    "use_calibration": True,
 }
 
 for key, val in default_states.items():
@@ -977,11 +1277,26 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
     student_name = s_file.name.rsplit(".", 1)[0].replace("_", " ").title()
     word_count = len(student_text.split())
 
+    # Calibration: past essays this teacher graded, so the AI matches their
+    # standard instead of a generic one. Empty for a first-time user.
+    calibration_text = ""
+    if st.session_state.get("use_calibration", True):
+        try:
+            calibration_text = build_calibration_text(
+                student_text,
+                st.session_state.get("user_email", ""),
+                st.session_state.get("preset_template", "Essay"),
+            )
+        except Exception as e:
+            logger.warning("Calibration unavailable: %s", e)
+
     full_prompt = (
         f"{SYSTEM_PROMPT}\n\n"
         f"<assignment_question>\n{prompt_text}\n</assignment_question>\n\n"
         f"<rubric_data>\n{rubric_text}\n</rubric_data>"
     )
+    if calibration_text:
+        full_prompt += f"\n\n{calibration_text}"
 
     raw = {}
     if gemini_client:
@@ -998,6 +1313,7 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
     item = normalize_grading_result(raw, student_name, word_count, target_scale)
     if item is not None:
         item["text"] = student_text
+        item["calibrated"] = bool(calibration_text)
     return item
 
 # --- HEADER & STEPPER ---
@@ -1275,6 +1591,30 @@ with wizard_tab2:
 
     with col_u2:
         st.markdown("#### 2. Student Submissions")
+
+        # A class tag scopes the handwriting glossary. Names and vocabulary
+        # recur within a class, which is exactly what makes the corrections
+        # from one paper useful on the next.
+        st.text_input(
+            "Class (optional — improves handwriting accuracy)",
+            key="active_class_tag",
+            placeholder="e.g. 10A",
+            help=(
+                "Corrections you make to a transcript are remembered per class. "
+                "Upload 10A today and the AI reads 10A's handwriting better tomorrow."
+            ),
+        )
+
+        _glossary_rows = _fetch_transcript_corrections(
+            st.session_state.get("user_email", ""),
+            st.session_state.get("active_class_tag", ""),
+        )
+        if _glossary_rows:
+            st.success(
+                f"🧠 Learned handwriting: **{len(_glossary_rows)}** correction(s) "
+                "will be applied to this batch."
+            )
+
         student_files = st.file_uploader(
             "Upload Student Papers (PDF, DOCX, TXT, Images)",
             type=["txt", "pdf", "docx", "png", "jpg", "jpeg"],
@@ -1466,7 +1806,9 @@ with wizard_tab3:
                                 teacher_score=adjusted_total,
                                 teacher_feedback=item.get("feedback", ""),
                                 red_pen_corrections=item.get("corrections", ""),
-                                teacher_email=user_email
+                                teacher_email=user_email,
+                                class_tag=st.session_state.get("active_class_tag", ""),
+                                was_handwritten=bool(item.get("was_handwritten")),
                             )
                         st.success(f"✅ Grade for {student_name} locked and saved!")
                         st.rerun()
@@ -1501,15 +1843,64 @@ with wizard_tab3:
                     # teacher check what the AI actually graded before locking a grade.
                     submitted_text = item.get("text", "")
                     if submitted_text:
-                        with st.expander("🔍 Text the AI graded (check transcription accuracy)"):
-                            st.text_area(
+                        with st.expander("🔍 Text the AI graded — fix any misread words to teach the system"):
+                            st.caption(
+                                "Correct only what the AI misread (names, unclear words). "
+                                "Each fix is remembered for this class and applied to future papers."
+                            )
+                            edited_transcript = st.text_area(
                                 "Transcribed submission",
                                 value=submitted_text,
-                                height=220,
-                                disabled=True,
+                                height=240,
                                 key=f"transcript_{idx}_{student_name}",
                                 label_visibility="collapsed",
                             )
+
+                            col_fix1, col_fix2 = st.columns(2)
+                            with col_fix1:
+                                if st.button(
+                                    "🧠 Save corrections & teach the AI",
+                                    key=f"learn_{idx}_{student_name}",
+                                    width="stretch",
+                                ):
+                                    pairs = _diff_corrections(submitted_text, edited_transcript)
+                                    if not pairs:
+                                        st.info("No word-level changes detected to learn from.")
+                                    else:
+                                        learned = save_transcript_corrections(
+                                            teacher_email=st.session_state.get("user_email", ""),
+                                            class_tag=st.session_state.get("active_class_tag", ""),
+                                            source_file=student_name,
+                                            original=submitted_text,
+                                            corrected=edited_transcript,
+                                        )
+                                        item["text"] = edited_transcript
+                                        if learned:
+                                            st.success(
+                                                f"✅ Learned {learned} correction(s). "
+                                                "They will be applied to the next papers from this class."
+                                            )
+                                            with st.expander("What was learned"):
+                                                for wrong, right in pairs:
+                                                    st.write(f'• "{wrong}" → **{right}**')
+                                        else:
+                                            st.warning(
+                                                "Corrections could not be saved — check the database connection."
+                                            )
+                            with col_fix2:
+                                if st.button(
+                                    "♻️ Re-grade with corrected text",
+                                    key=f"regrade_{idx}_{student_name}",
+                                    width="stretch",
+                                ):
+                                    item["text"] = edited_transcript
+                                    st.info(
+                                        "Corrected text saved to this result. Re-run the batch "
+                                        "to regrade against it."
+                                    )
+
+                    if item.get("calibrated"):
+                        st.caption("🎯 Graded using your previous marking decisions as calibration.")
                     if item.get("corrections"):
                         st.warning(item["corrections"])
                     st.markdown(f"**Detailed Feedback:**\n\n{item.get('feedback', 'No detailed feedback generated.')}")
