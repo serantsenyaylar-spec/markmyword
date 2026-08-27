@@ -311,7 +311,9 @@ def _retry_with_backoff(fn, *, label: str):
             )
             if not hint:
                 # Jitter: five papers from one batch must not retry in lockstep.
-                delay *= random.uniform(0.75, 1.25)
+                # Sleep jitter only, never a security decision, so the standard
+                # PRNG is intentional here (Bandit B311 suppressed below).
+                delay *= random.uniform(0.75, 1.25)  # nosec B311
             delay = min(delay, max(0.0, RETRY_BUDGET_SECONDS - slept))
 
             logger.warning(
