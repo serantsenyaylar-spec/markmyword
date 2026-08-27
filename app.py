@@ -231,8 +231,9 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
         # Generate embeddings if the API key is present
         if gemini_key:
             client = genai.Client(api_key=gemini_key)
+            # gemini-embedding-001: text-embedding-004 was shut down 2026-01-14.
             emb_res = client.models.embed_content(
-                model="text-embedding-004",
+                model="gemini-embedding-001",
                 contents=student_text
             )
             embedding = emb_res.embeddings[0].values
@@ -744,8 +745,14 @@ You MUST output strictly in valid JSON matching this exact structure:
   "feedback": "string"
 }"""
 
-GEMINI_MODEL = "gemini-2.5-flash"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+# Model versions checked 2026-08-27:
+# - gemini-3.7-flash: latest stable Flash (GA 2026-08-13). The previous
+#   gemini-2.5-flash line is shut down in October 2026.
+# - openai/gpt-oss-120b: Groq's recommended replacement for
+#   llama-3.3-70b-versatile, which was shut down on 2026-08-16. Supports
+#   response_format json_object; reasoning is returned in a separate field.
+GEMINI_MODEL = "gemini-3.7-flash"
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 
 def _to_float(value, default=0.0):
@@ -863,31 +870,43 @@ with col_title:
     st.markdown("### **İSTEK Schools Automated English Grader**")
 
 with col_time:
+    # NOTE: st.html is NOT iframed in current Streamlit and its content is
+    # sanitized with DOMPurify. Any "<" + "/" sequence inside the <script>
+    # body (e.g. the "</b>" we used to build via innerHTML) makes DOMPurify
+    # drop the whole script tag as an mXSS vector, which froze this clock at
+    # "Loading...". Write text with textContent only, and scope CSS to
+    # #client-time instead of body (body rules leak into the whole app).
     st.html(
         """
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-            body { margin: 0; overflow: hidden; background-color: transparent; }
             #client-time {
                 text-align: right; 
                 color: #6b7280; 
                 font-family: 'Inter', sans-serif; 
                 font-size: 0.95rem; 
+                font-weight: 600;
                 margin-top: 15px;
             }
         </style>
-        <div id="client-time">🕒 <b>Loading...</b></div>
+        <div id="client-time">🕒 Loading...</div>
         
         <script>
-            function updateTime() {
-                const now = new Date();
-                const dateStr = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-                const timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-                
-                document.getElementById('client-time').innerHTML = "🕒 <b>" + dateStr + " | " + timeStr + "</b>";
-            }
-            updateTime();
-            setInterval(updateTime, 60000);
+            (function () {
+                var el = document.getElementById('client-time');
+                if (!el) { return; }
+                function updateTime() {
+                    var now = new Date();
+                    var dateStr = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                    var timeStr = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+                    el.textContent = '🕒 ' + dateStr + ' | ' + timeStr;
+                }
+                // Re-runs of the Streamlit script re-execute this block; clear
+                // the previous timer so intervals do not pile up.
+                if (window.__mmwClockTimer) { clearInterval(window.__mmwClockTimer); }
+                window.__mmwClockTimer = setInterval(updateTime, 15000);
+                updateTime();
+            })();
         </script>
         """,
         unsafe_allow_javascript=True,
