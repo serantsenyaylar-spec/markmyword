@@ -172,14 +172,23 @@ def _looks_like_extension(file_bytes: bytes, file_extension: str) -> bool:
 #
 # Fix for both: retry with jittered exponential backoff, and report API trouble
 # by *raising* — Streamlit deliberately does not cache raised exceptions, so the
-# next pass really does re-read the scan. Budgets are kept small on purpose:
-# these sleeps block the script run, and a batch of papers must not stall for
-# minutes because one shared model is busy.
-RETRY_MAX_ATTEMPTS = 4              # first try + 3 retries
-RETRY_BASE_SECONDS = 1.5            # 1.5s -> 3s -> 6s, capped below
-RETRY_MAX_SLEEP_SECONDS = 8.0
-RETRY_BUDGET_SECONDS = 20.0         # total sleeping per API call
-BATCH_RETRY_COOLDOWN_SECONDS = 15.0  # pause before the batch's second pass
+# next pass really does re-read the scan.
+#
+# Budgets are tuned for *sustained* saturation, not just a single blip: Google
+# runs demand spikes that last several minutes, and a paper lost at minute one
+# is not saved by one fast retry at 1.5s. The window below (8 attempts with a
+# ~2-minute sleeping budget per call, then a 30s batch-level cooldown and a
+# full second pass) lets a multi-minute spike self-heal without teacher
+# intervention. The cost is bounded on purpose: each paper burns at most ~2
+# minutes of sleeping per cycle, so even a fully saturated five-paper batch
+# degrades to a slow-but-progressing run instead of a silent multi-hour stall,
+# and nothing that fails is ever cached — re-running the batch later costs only
+# real API calls.
+RETRY_MAX_ATTEMPTS = 8              # first try + 7 retries
+RETRY_BASE_SECONDS = 2.0            # 2s -> 4s -> 8s -> 16s -> 30s (capped below)
+RETRY_MAX_SLEEP_SECONDS = 30.0
+RETRY_BUDGET_SECONDS = 120.0        # total sleeping per API call (~2-minute window)
+BATCH_RETRY_COOLDOWN_SECONDS = 30.0 # pause before the batch's second pass
 
 _TRANSIENT_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
 # gRPC-style status names Google puts in APIError.status for the same class of
@@ -314,7 +323,9 @@ def _retry_with_backoff(fn, *, label: str):
                 time.sleep(delay)
                 slept += delay
 
-    raise TransientAPIError(label, RETRY_MAX_ATTEMPTS, last_exc)
+    # ``attempt`` is how many calls actually went out: when the sleep budget
+    # binds before the attempt cap, reporting the cap would overstate it.
+    raise TransientAPIError(label, attempt, last_exc)
 
 
 # --- HANDWRITING / SCANNED-DOCUMENT TRANSCRIPTION ---
