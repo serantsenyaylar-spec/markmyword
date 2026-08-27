@@ -4,6 +4,9 @@ import io
 import json
 import logging
 import os
+import random
+import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,166 @@ def _looks_like_extension(file_bytes: bytes, file_extension: str) -> bool:
     return file_bytes.startswith(expected)
 
 
+# --- TRANSIENT API FAILURES: RETRY, AND NEVER CACHE ONE -------------------
+# Gemini answers `503 UNAVAILABLE. This model is currently experiencing high
+# demand. Spikes in demand are usually temporary.` whenever the shared endpoint
+# is saturated: the request was never processed, and the identical call a few
+# seconds later usually succeeds. Two things made such a blip expensive here.
+#
+# 1. Nothing retried, so one 503 cost the whole paper (no transcript -> the
+#    batch skipped the file, no grade, teacher re-uploads).
+# 2. st.cache_data caches whatever a function *returns*, so the failure tuple
+#    was stored against the upload's bytes and replayed on every rerun until the
+#    TTL expired. The on-screen advice "try the batch again" therefore re-showed
+#    the same 503 without calling the API at all.
+#
+# Fix for both: retry with jittered exponential backoff, and report API trouble
+# by *raising* — Streamlit deliberately does not cache raised exceptions, so the
+# next pass really does re-read the scan. Budgets are kept small on purpose:
+# these sleeps block the script run, and a batch of papers must not stall for
+# minutes because one shared model is busy.
+RETRY_MAX_ATTEMPTS = 4              # first try + 3 retries
+RETRY_BASE_SECONDS = 1.5            # 1.5s -> 3s -> 6s, capped below
+RETRY_MAX_SLEEP_SECONDS = 8.0
+RETRY_BUDGET_SECONDS = 20.0         # total sleeping per API call
+BATCH_RETRY_COOLDOWN_SECONDS = 15.0  # pause before the batch's second pass
+
+_TRANSIENT_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
+# gRPC-style status names Google puts in APIError.status for the same class of
+# failure; "UNKNOWN"/"INTERNAL" are included because the API uses them for
+# transient backend faults on generate_content.
+_TRANSIENT_STATUSES = frozenset({
+    "UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "INTERNAL", "UNKNOWN",
+})
+# Last resort: substrings that identify a retryable failure when it survives only
+# as prose (httpx transport errors, proxies, older SDK versions).
+_TRANSIENT_MARKERS = (
+    "high demand",
+    "please try again",
+    "try again later",
+    "temporarily unavailable",
+    "overloaded",
+    "quota",
+    "rate limit",
+    "too many requests",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "deadline exceeded",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "server disconnected",
+    "peer closed connection",
+    "timed out",
+    "timeout",
+)
+# Retry-After: 30 | {"retryInfo": {"retryDelay": "30s"}} | retry_delay=30
+_RETRY_HINT_RE = re.compile(
+    r"retry[\s_-]?(?:after|delay)[\"']?\s*[:=]?\s*[\"']?(\d+(?:\.\d+)?)\s*s?",
+    re.IGNORECASE,
+)
+
+
+class TransientAPIError(RuntimeError):
+    """An API call that was refused for a reason that clears on its own.
+
+    Raised rather than returned so the caller's cache cannot freeze the failure
+    in place, and so the batch loop can tell "the model is busy" (worth another
+    pass) from "this scan is unreadable" (never worth re-billing).
+    """
+
+    def __init__(self, label: str, attempts: int, cause):
+        detail = " ".join(str(cause or "").split())[:300]
+        super().__init__(f"{label} was unavailable after {attempts} attempt(s): {detail}")
+        self.label = label
+        self.attempts = attempts
+        self.detail = detail
+
+
+class TranscriptionNotConfigured(RuntimeError):
+    """Vision transcription was needed but no GEMINI_API_KEY is set.
+
+    Also raised rather than returned, so adding the key mid-session takes effect
+    on the next batch instead of being hidden behind a cached "no_key" result.
+    """
+
+
+def _is_transient_api_error(exc: Exception) -> bool:
+    """True when repeating the exact same call has a decent chance of working."""
+    for attr in ("code", "status_code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value in _TRANSIENT_HTTP_CODES:
+            return True
+
+    # genai surfaces the canonical status name ("UNAVAILABLE"); some clients
+    # hand back an enum repr like "StatusCode.UNAVAILABLE".
+    status = str(getattr(exc, "status", "") or "").upper().rsplit(".", 1)[-1]
+    if status in _TRANSIENT_STATUSES:
+        return True
+
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
+
+
+def _retry_hint_seconds(exc: Exception) -> float:
+    """Seconds the provider asked us to wait, or 0 when it gave no hint.
+
+    Capped so a bogus or absurd header cannot park a whole class's batch.
+    """
+    match = _RETRY_HINT_RE.search(f"{getattr(exc, 'details', '')} {exc}")
+    if not match:
+        return 0.0
+    try:
+        return max(0.0, min(float(match.group(1)), RETRY_MAX_SLEEP_SECONDS * 3))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _retry_with_backoff(fn, *, label: str):
+    """Runs one API call, retrying only transient failures.
+
+    Non-retryable errors propagate untouched (a 400 does not become a 200 by
+    asking again). When attempts or the sleep budget run out, the caller gets a
+    TransientAPIError carrying a message it can show to a teacher.
+    """
+    last_exc = None
+    slept = 0.0
+
+    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_transient_api_error(exc):
+                raise
+            last_exc = exc
+            if attempt == RETRY_MAX_ATTEMPTS or slept >= RETRY_BUDGET_SECONDS:
+                break
+
+            hint = _retry_hint_seconds(exc)
+            delay = hint or min(
+                RETRY_BASE_SECONDS * (2 ** (attempt - 1)), RETRY_MAX_SLEEP_SECONDS
+            )
+            if not hint:
+                # Jitter: five papers from one batch must not retry in lockstep.
+                delay *= random.uniform(0.75, 1.25)
+            delay = min(delay, max(0.0, RETRY_BUDGET_SECONDS - slept))
+
+            logger.warning(
+                "%s: transient failure on attempt %d/%d (%s); retrying in %.1fs",
+                label, attempt, RETRY_MAX_ATTEMPTS,
+                " ".join(str(exc).split())[:200], delay,
+            )
+            if delay > 0:
+                time.sleep(delay)
+                slept += delay
+
+    raise TransientAPIError(label, RETRY_MAX_ATTEMPTS, last_exc)
+
+
 # --- HANDWRITING / SCANNED-DOCUMENT TRANSCRIPTION ---
 # A PDF exported from Word carries a real text layer that pypdf can read. A
 # scanned or phone-photographed handwritten paper carries only page *images*,
@@ -206,21 +369,31 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str, glossary: str 
     build_transcription_glossary). It is part of the cache key, so adding a
     correction correctly invalidates the cached transcript for a re-run.
 
-    Returns ``(text, error_code)``. Cached on the file bytes so Streamlit's
-    reruns (every widget interaction re-executes the script) never re-bill the
-    same upload to the API.
+    Returns ``(text, error_code)`` for the interactions worth remembering: the
+    transcript, or ``("", "blank")`` when a page genuinely held no writing (that
+    *is* an answer, so caching it avoids re-billing the scan).
+
+    Every other outcome raises instead of returning, because st.cache_data
+    caches return values but never exceptions — a busy model or a missing key
+    must not be pinned to this upload for the next hour. Transient 5xx/429
+    responses are retried with backoff first, so only a model that stayed busy
+    ends up raising.
+
+    Cached on the file bytes so Streamlit's reruns (every widget interaction
+    re-executes the script) never re-bill the same upload to the API.
     """
     gemini_key = get_secret("GEMINI_API_KEY")
     if not gemini_key:
-        return "", "no_key"
+        raise TranscriptionNotConfigured("No GEMINI_API_KEY is configured.")
 
     prompt = TRANSCRIPTION_PROMPT
     if glossary:
         prompt = f"{TRANSCRIPTION_PROMPT}\n{glossary}"
 
-    try:
-        client = genai.Client(api_key=gemini_key)
-        response = client.models.generate_content(
+    client = genai.Client(api_key=gemini_key)
+
+    def _generate():
+        return client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[
                 types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
@@ -232,14 +405,41 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str, glossary: str 
                 temperature=0.0,
             ),
         )
+
+    response = _retry_with_backoff(_generate, label="Handwriting recognition")
+
+    try:
         text = (response.text or "").strip()
     except Exception as e:
-        logger.warning("Vision transcription failed (%s): %s", mime_type, e)
-        return "", f"api_error:{e}"
+        # The call was billed and answered; an unparsable or blocked body is a
+        # read failure, not an outage, so caching it is the cheaper outcome.
+        logger.info("Vision transcription returned no usable text (%s): %s", mime_type, e)
+        return "", "blank"
 
     if not text or NO_TEXT_SENTINEL in text:
         return "", "blank"
     return text, ""
+
+
+def transcribe_submission(file_bytes: bytes, mime_type: str, glossary: str = ""):
+    """Calls the cached transcriber and maps anything that raised to a code.
+
+    Returns ``(transcript, error_code)`` with error_code one of ``""``,
+    ``"blank"``, ``"no_key"``, ``"unavailable"`` (the model stayed busy after the
+    retries — worth re-running this file alone) or ``"api_error:..."`` (a real
+    problem, e.g. a revoked key). Kept separate from the cached function so the
+    exception-to-code mapping never becomes a cacheable return value.
+    """
+    try:
+        return _transcribe_document_bytes(file_bytes, mime_type, glossary)
+    except TranscriptionNotConfigured:
+        return "", "no_key"
+    except TransientAPIError as e:
+        logger.warning("Vision transcription stayed unavailable: %s", e)
+        return "", "unavailable"
+    except Exception as e:
+        logger.warning("Vision transcription failed (%s): %s", mime_type, e)
+        return "", f"api_error:{e}"
 
 
 # --- LEARNING LOOP: HANDWRITING GLOSSARY -----------------------------------
@@ -507,10 +707,18 @@ def _report_transcription_error(filename: str, error_code: str):
             f"⚠️ **{filename}**: the pages were read, but no student writing was found. "
             "If the paper is faint, re-scan it brighter or upload a sharper photo."
         )
+    elif error_code == "unavailable":
+        st.error(
+            f"⚠️ **{filename}**: the handwriting model is at capacity (503 UNAVAILABLE) and "
+            f"still was after {RETRY_MAX_ATTEMPTS} attempts. Nothing is wrong with this "
+            "paper and nothing was cached, so running the batch again re-reads the scan for "
+            "real instead of replaying this error. Spikes like this clear within minutes."
+        )
     elif error_code.startswith("api_error"):
         st.error(
             f"⚠️ **{filename}**: handwriting recognition failed ({error_code.split(':', 1)[-1].strip()[:160]}). "
-            "This is usually a temporary API/quota issue — try the batch again."
+            "Transient 'model is busy' errors were already retried, so this one needs the "
+            "key or the request checked — then re-run the batch."
         )
 
 
@@ -535,8 +743,48 @@ def _read_pdf_text_layer(file_bytes: bytes):
     return "\n".join(parts).strip(), page_count
 
 
-def _extract_text_from_pdf(file_bytes: bytes, filename: str) -> str:
-    """Reads a PDF's text layer, falling back to vision OCR for scanned pages."""
+def _extract_meta(source: str, error_code: str = ""):
+    """Record of how one submission's text was obtained, for the batch loop.
+
+    ``transient`` is the flag that matters: a paper lost to a saturated model is
+    worth re-reading a few seconds later, while a blank scan or a spoofed file
+    would only waste another API call.
+    """
+    return {
+        "source": source,               # "text_layer" | "vision" | "document" | "none"
+        "error_code": error_code,       # see transcribe_submission / "" when fine
+        "transient": error_code == "unavailable",
+    }
+
+
+def _transcribe_upload(file_bytes: bytes, mime_type: str, filename: str):
+    """Vision-transcribes one upload, with the teacher-facing UI around it.
+
+    Returns ``(transcript, error_code)``. Shared by the PDF and image paths so
+    the spinner, the "corrections applied" caption and the failure messages
+    cannot drift apart between the two.
+    """
+    glossary = build_transcription_glossary(
+        st.session_state.get("user_email", ""),
+        st.session_state.get("active_class_tag", ""),
+    )
+
+    with st.spinner(f"✍️ Reading handwriting in {filename}…"):
+        transcript, error_code = transcribe_submission(file_bytes, mime_type, glossary)
+
+    if transcript:
+        note = f"✍️ {filename}: handwriting/scan transcribed by AI vision ({len(transcript.split())} words)."
+        if glossary:
+            note += " Applied your saved handwriting corrections."
+        st.caption(note)
+    return transcript, error_code
+
+
+def _extract_text_from_pdf(file_bytes: bytes, filename: str):
+    """Reads a PDF's text layer, falling back to vision OCR for scanned pages.
+
+    Returns ``(text, meta)`` — see _extract_meta.
+    """
     text, page_count = "", 0
     try:
         text, page_count = _read_pdf_text_layer(file_bytes)
@@ -547,33 +795,22 @@ def _extract_text_from_pdf(file_bytes: bytes, filename: str) -> str:
 
     # A digital PDF (Word/Docs export) already has everything we need.
     if text and len(text) >= MIN_CHARS_PER_PAGE_FOR_TEXT_LAYER * max(page_count, 1):
-        return text
+        return text, _extract_meta("text_layer")
 
     if page_count > MAX_PDF_PAGES:
         st.error(
             f"⚠️ **{filename}** has {page_count} pages — over the {MAX_PDF_PAGES}-page limit "
             "for handwriting recognition. Split it into per-student files."
         )
-        return text
+        return text, _extract_meta("text_layer", "too_many_pages")
 
-    glossary = build_transcription_glossary(
-        st.session_state.get("user_email", ""),
-        st.session_state.get("active_class_tag", ""),
-    )
-
-    with st.spinner(f"✍️ Reading handwriting in {filename}…"):
-        transcript, error_code = _transcribe_document_bytes(file_bytes, "application/pdf", glossary)
-
+    transcript, error_code = _transcribe_upload(file_bytes, "application/pdf", filename)
     if transcript:
-        note = f"✍️ {filename}: handwriting/scan transcribed by AI vision ({len(transcript.split())} words)."
-        if glossary:
-            note += " Applied your saved handwriting corrections."
-        st.caption(note)
-        return transcript
+        return transcript, _extract_meta("vision")
 
     _report_transcription_error(filename, error_code)
     # Fall back to whatever thin text layer existed rather than losing it.
-    return text
+    return text, _extract_meta("text_layer" if text else "none", error_code)
 
 
 def extract_text_from_file(uploaded_file):
@@ -584,8 +821,18 @@ def extract_text_from_file(uploaded_file):
     can be extracted. Oversized or mismatched (spoofed-extension) files are
     rejected up front.
     """
+    return extract_text_with_status(uploaded_file)[0]
+
+
+def extract_text_with_status(uploaded_file):
+    """extract_text_from_file plus why nothing came out: ``(text, meta)``.
+
+    The batch loop needs that second half — "the model was busy" and "this file
+    has no readable text" look identical from the transcript alone, but only the
+    first deserves a retry.
+    """
     if uploaded_file is None:
-        return ""
+        return "", _extract_meta("none", "no_file")
 
     # Hard per-file size cap, independent of the Streamlit server limit.
     file_bytes = uploaded_file.getvalue()
@@ -594,52 +841,42 @@ def extract_text_from_file(uploaded_file):
             f"⚠️ {uploaded_file.name} is {len(file_bytes) / (1024 * 1024):.1f} MB — "
             f"over the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB per-file limit. Skipped."
         )
-        return ""
+        return "", _extract_meta("none", "too_large")
 
     file_extension = uploaded_file.name.split('.')[-1].lower()
     if not _looks_like_extension(file_bytes, file_extension):
         st.error(f"⚠️ {uploaded_file.name} does not look like a real .{file_extension} file. Skipped.")
-        return ""
+        return "", _extract_meta("none", "bad_extension")
 
     try:
         if file_extension == 'pdf':
             return _extract_text_from_pdf(file_bytes, uploaded_file.name)
         elif file_extension == 'docx':
-            return (docx2txt.process(io.BytesIO(file_bytes)) or "").strip()
+            return (docx2txt.process(io.BytesIO(file_bytes)) or "").strip(), _extract_meta("document")
         elif file_extension == 'txt':
-            return file_bytes.decode("utf-8", errors="ignore").strip()
+            return file_bytes.decode("utf-8", errors="ignore").strip(), _extract_meta("document")
         elif file_extension in ('png', 'jpg', 'jpeg'):
             return extract_text_from_image(uploaded_file)
-        return ""
+        return "", _extract_meta("none", "unsupported_type")
     except Exception as e:
         st.error(f"Error reading {uploaded_file.name}: {e}")
-        return ""
+        return "", _extract_meta("none", f"read_error:{e}")
+
 
 def extract_text_from_image(uploaded_file):
-    """Transcribes an image submission (printed or handwritten) via Gemini vision."""
+    """Transcribes an image submission (printed or handwritten) via Gemini vision.
+
+    Returns ``(text, meta)`` — see _extract_meta.
+    """
     ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
     mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
 
-    glossary = build_transcription_glossary(
-        st.session_state.get("user_email", ""),
-        st.session_state.get("active_class_tag", ""),
-    )
-
-    with st.spinner(f"✍️ Reading handwriting in {uploaded_file.name}…"):
-        transcript, error_code = _transcribe_document_bytes(uploaded_file.getvalue(), mime, glossary)
-
+    transcript, error_code = _transcribe_upload(uploaded_file.getvalue(), mime, uploaded_file.name)
     if transcript:
-        note = (
-            f"✍️ {uploaded_file.name}: handwriting/scan transcribed by AI vision "
-            f"({len(transcript.split())} words)."
-        )
-        if glossary:
-            note += " Applied your saved handwriting corrections."
-        st.caption(note)
-        return transcript
+        return transcript, _extract_meta("vision")
 
     _report_transcription_error(uploaded_file.name, error_code)
-    return ""
+    return "", _extract_meta("none", error_code)
 
 def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email="", class_tag="", was_handwritten=False):
     """Saves evaluation records to Supabase vector memory using Student Full Name.
@@ -1105,6 +1342,10 @@ def run_gemini_structured(client, model_name, user_prompt, student_text):
 
     The grading rules (system prompt) are passed as system_instruction so the
     student text in the user part cannot override them (prompt-injection defense).
+
+    Raises TransientAPIError when the model stayed unavailable after the retries,
+    so the caller can still fall back to another engine but knows the difference
+    between "overloaded" and "refused to grade this".
     """
     if not client:
         return {}
@@ -1116,26 +1357,36 @@ def run_gemini_structured(client, model_name, user_prompt, student_text):
         else:
             system_instruction = user_prompt
             user_content = "Grade the submission against the system instructions."
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[
-                types.Part.from_text(text=user_content),
-                types.Part.from_text(text=f"<student_submission>\n{student_text}\n</student_submission>"),
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                response_schema=GradingOutput,
-            ),
-        )
+
+        def _generate():
+            return client.models.generate_content(
+                model=model_name,
+                contents=[
+                    types.Part.from_text(text=user_content),
+                    types.Part.from_text(text=f"<student_submission>\n{student_text}\n</student_submission>"),
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_schema=GradingOutput,
+                ),
+            )
+
+        response = _retry_with_backoff(_generate, label=f"Gemini grading ({model_name})")
         return json.loads(response.text)
 
+    except TransientAPIError:
+        raise
     except Exception as e:
-        print(f"[Gemini Worker Error] {model_name}: {e!s}")
+        logger.warning("[Gemini Worker Error] %s: %s", model_name, e)
         return {}
 
 def run_groq_structured(client, user_prompt, text_content):
-    """Executes Groq API safely across main or background threads."""
+    """Executes Groq API safely across main or background threads.
+
+    Raises TransientAPIError for a saturated/timeout response after the retries,
+    for the same reason as run_gemini_structured.
+    """
     if not client or not text_content:
         return {}
     try:
@@ -1148,18 +1399,24 @@ def run_groq_structured(client, user_prompt, text_content):
         else:
             system_content = "You are an expert academic evaluator. Return JSON matching the expected schema."
             user_content = user_prompt
-        completion = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": f"{user_content}\n\n<student_submission>\n{text_content}\n</student_submission>"}
-            ],
-            response_format={"type": "json_object"}
-        )
+
+        def _complete():
+            return client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": f"{user_content}\n\n<student_submission>\n{text_content}\n</student_submission>"}
+                ],
+                response_format={"type": "json_object"}
+            )
+
+        completion = _retry_with_backoff(_complete, label=f"Groq grading ({GROQ_MODEL})")
         return json.loads(completion.choices[0].message.content)
 
+    except TransientAPIError:
+        raise
     except Exception as e:
-        print(f"[Groq Worker Error]: {e!s}")
+        logger.warning("[Groq Worker Error]: %s", e)
         return {}
         
 # --- EVALUATION RUNNERS ---
@@ -1273,7 +1530,14 @@ def normalize_grading_result(raw, student_name, word_count, target_scale):
 
 
 def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, rubric_text, s_file):
-    """Grades one submission with Gemini (preferred) or Groq (fallback)."""
+    """Grades one submission with Gemini (preferred) or Groq (fallback).
+
+    Returns ``(item, unavailable)``. ``item`` is None when neither engine
+    produced a grade; ``unavailable`` is then True if either engine reported
+    saturation, because that is the one case where the same paper is worth
+    grading again a moment later. A refusal that no retry can fix (bad request,
+    content policy, revoked key) leaves it False.
+    """
     student_name = s_file.name.rsplit(".", 1)[0].replace("_", " ").title()
     word_count = len(student_text.split())
 
@@ -1299,22 +1563,31 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
         full_prompt += f"\n\n{calibration_text}"
 
     raw = {}
+    unavailable = False
     if gemini_client:
-        raw = run_gemini_structured(gemini_client, GEMINI_MODEL, full_prompt, student_text)
+        try:
+            raw = run_gemini_structured(gemini_client, GEMINI_MODEL, full_prompt, student_text)
+        except TransientAPIError as e:
+            logger.warning("Gemini grading skipped for %s: %s", s_file.name, e)
+            unavailable = True
 
     if not isinstance(raw, dict) or not raw:
         if groq_client:
-            raw = run_groq_structured(groq_client, full_prompt, student_text)
+            try:
+                raw = run_groq_structured(groq_client, full_prompt, student_text)
+            except TransientAPIError as e:
+                logger.warning("Groq grading skipped for %s: %s", s_file.name, e)
+                unavailable = True
 
     if not isinstance(raw, dict) or not raw:
-        return None
+        return None, unavailable
 
     target_scale = float(st.session_state.get("total_rubric_scale", 100))
     item = normalize_grading_result(raw, student_name, word_count, target_scale)
     if item is not None:
         item["text"] = student_text
         item["calibrated"] = bool(calibration_text)
-    return item
+    return item, False
 
 # --- HEADER & STEPPER ---
 col_logo, col_title, col_time = st.columns([1, 3, 1], vertical_alignment="center")
@@ -1682,20 +1955,38 @@ with wizard_tab2:
                         progress_bar = st.progress(0)
                         status_text = st.empty()
                         successful, skipped = 0, 0
+                        # Papers dropped by a saturated model, held for one more pass.
+                        # A failed read is never cached, so this pass genuinely re-reads
+                        # the scan; files that failed for a real reason (blank page, no
+                        # key, spoofed upload) are deliberately not retried.
+                        busy_papers, still_busy = [], []
 
-                        for i, s_file in enumerate(files_to_grade):
-                            status_text.text(f"Evaluating submission {i+1}/{len(files_to_grade)}: {s_file.name}...")
+                        def grade_one(pending):
+                            """Reads and grades one paper; returns the result or None.
 
-                            student_text = (extract_text_from_file(s_file) or "").strip()
+                            Records why it failed in ``pending["busy"]`` so the caller can
+                            tell "the model was at capacity" from "there was nothing to
+                            read". A transcript already in ``pending`` is reused, which
+                            keeps a re-run from paying for the same scan twice.
+                            """
+                            s_file = pending["file"]
+                            pending["busy"] = False
+                            student_text, meta = pending.get("text", ""), pending.get("meta")
+
                             if not student_text:
-                                # extract_text_from_file already surfaced the specific
-                                # reason (missing API key, blank scan, API error, ...).
-                                st.warning(f"⚠️ Skipped **{s_file.name}** — see the message above for the reason.")
-                                skipped += 1
-                                progress_bar.progress((i + 1) / len(files_to_grade))
-                                continue
+                                student_text, meta = extract_text_with_status(s_file)
+                                student_text = (student_text or "").strip()
+                                if not student_text:
+                                    # extract_text_with_status already surfaced the specific
+                                    # reason (missing key, blank scan, busy model, ...).
+                                    pending["busy"] = bool(meta.get("transient"))
+                                    st.warning(f"⚠️ Skipped **{s_file.name}** — see the message above for the reason.")
+                                    return None
+                                # Keep the transcript: if grading is what fails, the retry
+                                # must not pay for reading the same scan a second time.
+                                pending["text"], pending["meta"] = student_text, meta
 
-                            result = grade_single_paper(
+                            result, unavailable = grade_single_paper(
                                 gemini_client=gemini_client,
                                 groq_client=groq_client,
                                 student_text=student_text,
@@ -1705,15 +1996,49 @@ with wizard_tab2:
                             )
 
                             if result is None:
-                                st.warning(f"⚠️ Skipped {s_file.name}: AI evaluation failed.")
-                                skipped += 1
-                                progress_bar.progress((i + 1) / len(files_to_grade))
-                                continue
+                                pending["busy"] = bool(unavailable)
+                                st.warning(
+                                    f"⚠️ Skipped {s_file.name}: AI evaluation failed"
+                                    + (" — the model was at capacity." if unavailable else ".")
+                                )
+                                return None
 
-                            st.session_state.graded_batch.append(result)
-                            st.session_state.graded_count = int(st.session_state.get("graded_count", 0)) + 1
-                            successful += 1
+                            # Tab 3 stores this on the exemplar, and the learning loop
+                            # only makes sense for transcripts that came from OCR — record
+                            # the real source instead of always claiming "typed".
+                            result["was_handwritten"] = (meta or {}).get("source") == "vision"
+                            return result
+
+                        for i, s_file in enumerate(files_to_grade):
+                            status_text.text(f"Evaluating submission {i+1}/{len(files_to_grade)}: {s_file.name}...")
+
+                            pending = {"file": s_file}
+                            result = grade_one(pending)
+                            if result is None:
+                                skipped += 1
+                                if pending["busy"]:
+                                    busy_papers.append(pending)
+                            else:
+                                st.session_state.graded_batch.append(result)
+                                st.session_state.graded_count = int(st.session_state.get("graded_count", 0)) + 1
+                                successful += 1
                             progress_bar.progress((i + 1) / len(files_to_grade))
+
+                        if busy_papers:
+                            status_text.text(
+                                f"⏳ {len(busy_papers)} paper(s) hit a fully loaded model. Waiting "
+                                f"{BATCH_RETRY_COOLDOWN_SECONDS:.0f}s and reading them once more…"
+                            )
+                            time.sleep(BATCH_RETRY_COOLDOWN_SECONDS)
+                            for pending in busy_papers:
+                                result = grade_one(pending)
+                                if result is None:
+                                    continue
+                                st.session_state.graded_batch.append(result)
+                                st.session_state.graded_count = int(st.session_state.get("graded_count", 0)) + 1
+                                successful += 1
+                                skipped -= 1
+                            still_busy = [p["file"].name for p in busy_papers if p.get("busy")]
 
                         status_text.empty()
                         progress_bar.empty()
@@ -1722,6 +2047,14 @@ with wizard_tab2:
                         if skipped:
                             summary += f" Skipped {skipped} (no text or AI failure)."
                         st.success(summary + " Proceed to **Analytics & Reports** to inspect grades.")
+
+                        if still_busy:
+                            st.warning(
+                                f"⏳ The model is still loaded for: **{', '.join(still_busy)}**. "
+                                "Those papers were not cached and not graded, so re-running the "
+                                "batch with only them selected in a few minutes picks them up — "
+                                "the grades already in this batch are unaffected."
+                            )
                 
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
