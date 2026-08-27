@@ -1899,7 +1899,57 @@ with wizard_tab2:
                 "Clear, well-lit, upright pages give the most accurate transcript."
             ),
         )
-        st.info(f"Submissions ready for grading: **{len(student_files) if student_files else 0}**")
+        upload_count = len(student_files) if student_files else 0
+        st.info(f"Submissions ready for grading: **{upload_count}**")
+
+        if student_files:
+            # Make the image-first workflow obvious: each scan is transcribed,
+            # then the verbatim transcript is sent to the grader. This preview
+            # also gives a teacher a chance to catch an upside-down or blurry
+            # phone photo before spending an OCR request.
+            st.markdown("##### 🔎 Upload check")
+            st.caption(
+                "Every handwritten scan follows this path: **photo/PDF → AI handwriting "
+                "transcript → rubric grade**. The original upload is never changed. "
+                "Review the transcript in Step 3 before locking a mark."
+            )
+            for uploaded in student_files:
+                suffix = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+                size_mb = len(uploaded.getvalue()) / (1024 * 1024)
+                if suffix in {"png", "jpg", "jpeg"}:
+                    label = "handwritten image"
+                elif suffix == "pdf":
+                    label = "PDF scan or document"
+                elif suffix == "docx":
+                    label = "Word document"
+                else:
+                    label = "typed text"
+                st.markdown(
+                    f"✅ **{html.escape(uploaded.name)}** · {label} · {size_mb:.1f} MB",
+                    unsafe_allow_html=True,
+                )
+
+            image_uploads = [
+                uploaded for uploaded in student_files
+                if uploaded.name.rsplit(".", 1)[-1].lower() in {"png", "jpg", "jpeg"}
+            ]
+            if image_uploads:
+                with st.expander("🖼️ Preview handwritten photos", expanded=False):
+                    preview_cols = st.columns(min(3, len(image_uploads)))
+                    for preview_index, uploaded in enumerate(image_uploads):
+                        with preview_cols[preview_index % len(preview_cols)]:
+                            st.image(uploaded, caption=uploaded.name, width="stretch")
+
+            if not get_secret("GEMINI_API_KEY"):
+                st.warning(
+                    "Handwritten images and scanned PDFs need **GEMINI_API_KEY** for vision "
+                    "transcription. Typed TXT/DOCX files can still be graded with the "
+                    "available grading engine."
+                )
+            st.caption(
+                "Best results: one paper per file, bright even lighting, the whole page "
+                "in frame, upright orientation, and handwriting darker than the background."
+            )
 
     st.divider()
     
