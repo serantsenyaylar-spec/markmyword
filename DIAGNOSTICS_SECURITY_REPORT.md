@@ -170,3 +170,46 @@ Dynamic checks used `streamlit.testing.v1.AppTest` for the unauthenticated gate,
 | F8 | Low (correctness of defaults) | The `preset_template` session default referenced a preset name that no longer exists ("Guided Essay Writing (120–150 words)"); it now matches the actual first preset, "Guided Paragraph Writing (B1+)". |
 
 No new dependencies were introduced; all pins remain as previously verified.
+
+---
+
+## Re-check — 2026-08-27 (branch `arena/01a04409-markmyword`)
+
+**Scope:** first full verification of PR #13 ("Retry handwriting recognition through sustained Gemini load spikes") at `f77b99c`, plus a repository file audit and housekeeping.
+
+### Verification results
+
+| Check | Result |
+|---|---|
+| Clean-venv install of the exact pins (Python 3.11.2) | ✅ PASS — `pip check` clean |
+| `python -m py_compile app.py` | ✅ PASS |
+| `bandit -r app.py` | ✅ PASS — **0 findings** after fix F9 (was 1 Low: B311) |
+| `pip-audit -r requirements.txt` | ✅ PASS — 0 known vulnerabilities |
+| `ruff check app.py` | 🟡 ADVISORY — 33 × BLE001 + 1 × SIM102 (see R4 note below) |
+| AppTest: no-secrets login gate | ✅ PASS — 0 exceptions, gate rendered, no raw `st.secrets` error |
+| AppTest: bypass flags without local `APP_ENV` | ✅ PASS — fails closed at login gate |
+| AppTest: explicit `APP_ENV=development` bypass | ✅ PASS — teacher portal rendered, bypass banner shown, 0 exceptions |
+| AppTest: bypass flags with `APP_ENV=production` | ✅ PASS — fails closed at login gate |
+| Transient-error classifier (new retry code) | ✅ PASS — 12/12: 400/401/403/malformed **not** retried; 429/500/503/504/timeout/connection **retried**; `StatusCode.UNAVAILABLE` retried; `StatusCode.PERMISSION_DENIED` not; `Retry-After`/`retry_delay` hints parsed and capped at 90 s |
+| Magic-byte upload guard | ✅ PASS — 8/8 (pdf/png/jpg/docx positive+negative, txt allow) |
+| Secret hygiene (tracked files + reachable history) | ✅ PASS — no credential-format matches; no real `secrets.toml` committed; `secrets.toml.example` parses as valid TOML |
+| Git integrity (`git fsck --no-reflogs --full`, `git diff --check`) | ✅ PASS |
+| File audit | ✅ CLEANED — see housekeeping below |
+
+### Retry feature review notes (PR #13)
+
+- `TransientAPIError` and `TranscriptionNotConfigured` are **raised**, not returned, so `@st.cache_data` cannot freeze a failure against an upload's bytes — the documented failure-caching bug is fixed by design, and re-running a failed batch costs only real API calls.
+- `random` is now used only for retry-sleep jitter (`random.uniform(0.75, 1.25)`), which is not a security-sensitive use; see F9.
+- Sleep budgets are bounded (`RETRY_BUDGET_SECONDS` = 120 s per call, `BATCH_RETRY_COOLDOWN_SECONDS` = 30 s), so a fully saturated batch degrades to slow-but-progressing rather than stalling.
+- The 10 new broad `except Exception` handlers (BLE001 23 → 33) all sit at API/parse/cache boundaries, log through `logger` without student text, and degrade gracefully (empty transcript, empty glossary, skipped cache clear). They are consistent with advisory item R4 and none reported a correctness problem.
+
+### Issues fixed in this pass
+
+| ID | Severity | Change |
+|---|---|---|
+| F9 | Low (Bandit hygiene) | The new retry jitter triggered Bandit **B311** (pseudo-random generator). The value only staggers retry sleep so parallel papers don't retry in lockstep — no security decision uses it. Suppressed with an inline `# nosec B311` plus a justification comment; Bandit baseline restored to **0 findings**. |
+| — | Housekeeping | Deleted `supabase/migrations/.gitkeep` (the directory now contains three real migration files, so the placeholder is dead weight) and removed local build artifacts (`__pycache__/`, `.ruff_cache/`). Verified every remaining tracked file is in use: the logo is referenced by `st.image` in the letterhead, and all config/policy/CI files serve documented purposes. |
+
+### R4 baseline note
+
+The advisory lint baseline changes from 24 to **34** findings because PR #13 added ten broad exception handlers. The R4 recommendation stands: replace them incrementally with expected SDK/network/parser exception types. No new SIM102 or other rule categories appeared.
