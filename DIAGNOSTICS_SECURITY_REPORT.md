@@ -129,3 +129,35 @@ git diff --check
 ```
 
 Dynamic checks used `streamlit.testing.v1.AppTest` for the unauthenticated gate, a fail-closed bypass configuration, and an explicitly local bypass configuration. Credential-format scans covered tracked source and reachable Git history.
+
+---
+
+## Re-check — 2026-08-27 (branch `arena/01a0424b-markmyword`)
+
+**Scope:** full repository re-verification on the merged `main` (identical to `arena/handoff`; both at `635de01`), plus targeted fixes.
+
+### Verification results
+
+| Check | Result |
+|---|---|
+| Clean-venv install of the exact pins (Python 3.11.2) | ✅ PASS — `pip check` clean |
+| `python -m py_compile app.py` | ✅ PASS |
+| `bandit -r app.py` | ✅ PASS — 0 findings |
+| `pip-audit -r requirements.txt` | ✅ PASS — 0 known vulnerabilities |
+| `ruff check app.py` | 🟡 ADVISORY — unchanged baseline: 23 × BLE001, 1 × SIM102 (see R4) |
+| AppTest: no-secrets login gate | ✅ PASS — 0 exceptions, gate rendered |
+| AppTest: explicit local dev bypass | ✅ PASS — 0 exceptions, teacher UI + admin tabs rendered |
+| AppTest: bypass with `APP_ENV=production` | ✅ PASS — fails closed at login gate |
+| CodeQL workflow history | ✅ All recent runs on `main` succeeded |
+| Git integrity (`git fsck`, `git diff --check`) | ✅ PASS |
+| Branch state | ℹ️ `main` and `arena/handoff` point at the same commit; nothing to reconcile |
+
+### Issues fixed in this pass
+
+| ID | Severity | Change |
+|---|---|---|
+| F6 | Medium (data quality) | `log_user_login` read the `login_notified` run-once guard but nothing inside it ever set the flag — the only assignment lived at the end of the unrelated `send_ntfy_alert` helper. With the database configured, every Streamlit rerun inserted another duplicate "Logged in as …" row into `user_logs`. The guard is now set inside `log_user_login` exactly when the audit row is written (and set on the no-database path); a failed insert still retries on the next run. `send_ntfy_alert` no longer mutates login-audit state. Verified by a stubbed regression test: 5 simulated reruns produce exactly 1 audit row. |
+| F7 | Low (latent `NameError`) | `from google.genai import types` was imported mid-file *below* `extract_text_from_image`, which uses `types.Part`. It only worked because call sites happened to run after the import line. The import now lives with the other top-level imports. |
+| F8 | Low (correctness of defaults) | The `preset_template` session default referenced a preset name that no longer exists ("Guided Essay Writing (120–150 words)"); it now matches the actual first preset, "Guided Paragraph Writing (B1+)". |
+
+No new dependencies were introduced; all pins remain as previously verified.
