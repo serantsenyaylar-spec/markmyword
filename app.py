@@ -1548,3 +1548,4 @@ st.markdown("""
         <p>&copy; 2026 Serant Şenyaylar. All rights reserved. Created for İSTEK Schools.</p>
     </div>
 """, unsafe_allow_html=True)
+# Trigger CodeQL
