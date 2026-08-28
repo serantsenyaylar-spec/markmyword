@@ -7,6 +7,7 @@ import os
 import random
 import re
 import time
+import zipfile
 
 logger = logging.getLogger(__name__)
 
@@ -1348,7 +1349,74 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
     except Exception as e:
         print(f"Sheets Save Error: {e}")
         return False
-        
+
+# --- INDIVIDUAL STUDENT REPORTS (brief §7a) ---------------------------------
+# One plain-text report per student, built from the same record the teacher just
+# locked. Used twice: zipped for the one-click download, and uploaded per-student
+# to the institution's Google Drive folder (brief §7b).
+def build_student_report_text(item: dict, target_scale, teacher_name: str = "") -> str:
+    """Formats one graded submission as a readable plain-text report."""
+    eval_data = item.get("evaluation_data") or {}
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+    ta = eval_data.get("score_task_achievement", 0)
+    org = eval_data.get("score_organization", 0)
+    acc = eval_data.get("score_accuracy", 0)
+    lines = [
+        "MARK MY WORDS - ISTEK SCHOOLS",
+        "INDIVIDUAL EVALUATION REPORT",
+        "=" * 52,
+        f"Student     : {item.get('student_name', 'Unknown')}",
+        f"Assignment  : {st.session_state.get('preset_template', 'Essay')}",
+        f"Class       : {st.session_state.get('active_class_tag') or '-'}",
+        f"Teacher     : {teacher_name or st.session_state.get('user_name', '')}",
+        f"Generated   : {stamp}",
+        "",
+        f"FINAL GRADE : {item.get('score', 0)} / {target_scale}",
+        f"Word count  : {item.get('word_count', 0)}",
+        "",
+        "CRITERION SCORES (0-3 band scale)",
+        f"  Task Achievement : {ta} / 3",
+        f"  Organization     : {org} / 3",
+        f"  Accuracy         : {acc} / 3",
+        "",
+        "FEEDBACK",
+        item.get("feedback") or "No feedback generated.",
+        "",
+        "RED-PEN CORRECTIONS",
+        item.get("corrections") or "No corrections flagged.",
+        "",
+        "SUBMISSION AS GRADED",
+        item.get("text", "") or "(no text)",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_reports_zip(batch: list, target_scale, teacher_name: str = "") -> bytes:
+    """Zips one report per student. Returns the .zip file as bytes.
+
+    Names are sanitised so a student name containing "/" or ":" cannot produce a
+    broken path, and duplicates (two students with the same name) get a suffix
+    instead of silently overwriting each other in the archive.
+    """
+    buffer = io.BytesIO()
+    used_names = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for item in batch:
+            raw = str(item.get("student_name") or "student")
+            base = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._") or "student"
+            name = base
+            suffix = 2
+            while f"{name}.txt" in used_names:
+                name = f"{base}_{suffix}"
+                suffix += 1
+            used_names.add(f"{name}.txt")
+            archive.writestr(
+                f"{name}.txt",
+                build_student_report_text(item, target_scale, teacher_name),
+            )
+    return buffer.getvalue()
+
 # --- AI EVALUATION HELPERS ---
 def run_gemini_structured(client, model_name, user_prompt, student_text):
     """Executes Gemini API and returns parsed JSON, or {} on failure.
@@ -1495,6 +1563,87 @@ def build_rubric_text():
         return "\n".join(lines)
     except Exception:
         return str(rubric)
+
+
+def _band_value(column) -> float | None:
+    """Parses a CSV header like '3', '3 pts' or 'Band 2' into a number."""
+    text = str(column).strip().lower()
+    for prefix in ("band ", "pts", "pt", "point", "points", "score", "mark"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+        if text.endswith(prefix):
+            text = text[: -len(prefix)].strip()
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_rubric_csv(file_bytes: bytes) -> tuple[str, float | None]:
+    """Turns a rubric CSV into the same text shape build_rubric_text() emits.
+
+    Brief §3b: teachers can upload their own rubric as CSV. Two layouts are
+    accepted, because both are common in exported rubrics:
+
+      wide — criterion,3,2,1,0            (the columns are the point bands)
+      long — criterion,points,description
+
+    Returns ``(rubric_text, highest_band)``. ``highest_band`` lets the caller
+    warn when a rubric is not on the 0-3 scale the grading prompt assumes.
+    """
+    try:
+        frame = pd.read_csv(io.BytesIO(file_bytes)).dropna(how="all")
+    except Exception as e:
+        logger.warning("Could not parse rubric CSV: %s", e)
+        return "", None
+
+    if frame.empty or len(frame.columns) < 2:
+        return "", None
+
+    first = frame.columns[0]
+    band_cols = [c for c in frame.columns[1:] if _band_value(c) is not None]
+
+    def _cell(value) -> str:
+        text = str(value).strip()
+        return "" if text.lower() in ("nan", "none", "") else text
+
+    lines: list[str] = []
+    if band_cols:
+        # Wide layout: one column per point band.
+        ordered = sorted(band_cols, key=lambda c: _band_value(c), reverse=True)
+        for _, row in frame.iterrows():
+            category = _cell(row[first])
+            if not category:
+                continue
+            lines.append(f"{category}:")
+            for col in ordered:
+                descriptor = _cell(row[col])
+                if descriptor:
+                    lines.append(f"  {_band_value(col):g} pts — {descriptor}")
+    else:
+        # Long layout: criterion / points / description.
+        points_col = descriptor_col = None
+        for col in frame.columns[1:]:
+            label = str(col).strip().lower()
+            if points_col is None and label in ("points", "point", "pts", "score", "band", "mark", "level"):
+                points_col = col
+            elif descriptor_col is None and label in ("description", "descriptor", "detail", "details", "criteria", "text"):
+                descriptor_col = col
+        if points_col is None and len(frame.columns) >= 2:
+            points_col = frame.columns[1]
+        if descriptor_col is None and len(frame.columns) >= 3:
+            descriptor_col = frame.columns[2]
+
+        for _, row in frame.iterrows():
+            category = _cell(row[first])
+            if not category:
+                continue
+            points = _cell(row[points_col]) if points_col else ""
+            descriptor = _cell(row[descriptor_col]) if descriptor_col else ""
+            lines.append(f"{category}: {points} pts — {descriptor}".rstrip(" —"))
+
+    highest = max((_band_value(c) for c in band_cols), default=None)
+    return "\n".join(lines), highest
 
 
 def normalize_grading_result(raw, student_name, word_count, target_scale):
@@ -1840,17 +1989,43 @@ with wizard_tab1:
         st.markdown("#### 🛠️ Custom Rubric Uploader")
         st.info(
             "**💡 How to upload your custom rubric:**\n"
-            "1. Save your rubric as a **.txt**, **.docx**, or **.pdf** file.\n"
+            "1. Save your rubric as a **.txt**, **.docx**, **.pdf** or **.csv** file.\n"
             "2. Click the 'Browse files' button below or drag and drop your file into the box.\n"
-            "3. The system will automatically read your file and lock the grading rules into memory."
+            "3. The system will automatically read your file and lock the grading rules into memory.\n\n"
+            "**CSV layouts accepted** — columns in any order:\n"
+            "• `criterion,3,2,1,0` (one column per point band)\n"
+            "• `criterion,points,description`"
         )
         
-        rubric_file = st.file_uploader("Upload Document", type=["txt", "docx", "pdf"], key="rubric_file_uploader")
+        rubric_file = st.file_uploader("Upload Document", type=["txt", "docx", "pdf", "csv"], key="rubric_file_uploader")
         
         if rubric_file is not None:
-            custom_text = extract_text_from_file(rubric_file)
-            st.session_state.custom_rubric_prompt = custom_text
-            st.success(f"✅ Successfully uploaded and processed: **{rubric_file.name}**")
+            suffix = rubric_file.name.rsplit(".", 1)[-1].lower() if "." in rubric_file.name else ""
+            if suffix == "csv":
+                custom_text, highest_band = parse_rubric_csv(rubric_file.getvalue())
+                if custom_text.strip():
+                    st.session_state.custom_rubric_prompt = custom_text
+                    st.success(f"✅ Successfully uploaded and processed: **{rubric_file.name}**")
+                    # The grader prompt scores each criterion on a 0-3 band. A CSV
+                    # on a wider scale would be silently squashed by that clamp, so
+                    # say so rather than returning misleading marks.
+                    if highest_band is not None and highest_band > 3:
+                        st.warning(
+                            f"⚠️ This rubric's bands go up to **{highest_band:g}**, but the grading "
+                            "prompt scores each criterion on a **0–3** scale. Scores will be "
+                            "clamped to 3 per criterion — rescale the CSV to 0–3 if that is not "
+                            "what you intend."
+                        )
+                else:
+                    st.error(
+                        f"⚠️ **{rubric_file.name}** could not be read as a rubric. Expected a first "
+                        "column of criteria plus either band columns (`3,2,1,0`) or "
+                        "`points` / `description` columns."
+                    )
+            else:
+                custom_text = extract_text_from_file(rubric_file)
+                st.session_state.custom_rubric_prompt = custom_text
+                st.success(f"✅ Successfully uploaded and processed: **{rubric_file.name}**")
 
     st.success("✅ Assessment prompt and rubric locked into memory! Proceed to **Batch Processing**.")
 
@@ -2152,7 +2327,28 @@ with wizard_tab3:
             st.plotly_chart(fig_bar, width="stretch")
             st.divider()
 
+            # --- Brief §7a: one ZIP containing an individual report per student ---
             target_scale = st.session_state.get("total_rubric_scale", 100)
+            st.markdown("##### 📦 Export Individual Reports")
+            st.caption(
+                "Downloads one plain-text report per student — final grade, criterion "
+                "breakdown, feedback, red-pen corrections and the submission as graded."
+            )
+            st.download_button(
+                label=f"📥 Download all {len(batch_data)} report(s) as ZIP",
+                data=build_reports_zip(
+                    batch_data,
+                    target_scale,
+                    st.session_state.get("user_name", ""),
+                ),
+                file_name=(
+                    f"MarkMyWords_Reports_"
+                    f"{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M')}.zip"
+                ),
+                mime="application/zip",
+                width="stretch",
+            )
+            st.divider()
 
             for idx, item in enumerate(batch_data):
                 student_name = item.get("student_name", f"Student #{idx+1}")
@@ -2206,6 +2402,30 @@ with wizard_tab3:
                                 class_tag=st.session_state.get("active_class_tag", ""),
                                 was_handwritten=bool(item.get("was_handwritten")),
                             )
+
+                        # Brief §7b: file the report in the institution's Drive folder.
+                        # upload_file_to_drive() returns None when the service account or
+                        # DRIVE_FOLDER_ID is absent, so this is a no-op if you never
+                        # configure Drive — safe to leave wired up either way.
+                        if DRIVE_FOLDER_ID:
+                            report_bytes = build_student_report_text(
+                                item, target_scale, user_name
+                            ).encode("utf-8")
+                            safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", student_name).strip("._") or "student"
+                            drive_id = upload_file_to_drive(
+                                report_bytes,
+                                f"{safe_name}_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')}.txt",
+                                DRIVE_FOLDER_ID,
+                                "text/plain",
+                            )
+                            if drive_id:
+                                st.caption(f"📁 Report filed to Google Drive.")
+                            else:
+                                st.caption(
+                                    "📁 Drive upload skipped — check **DRIVE_FOLDER_ID** and the "
+                                    "service-account secret."
+                                )
+
                         st.success(f"✅ Grade for {student_name} locked and saved!")
                         st.rerun()
 
