@@ -1,14 +1,23 @@
 # Runtime dependencies — exact pins verified in a clean virtual environment.
 # pip-audit reports 0 known vulnerabilities for these pins and for their full
-# transitive tree (verified 2026-08-27). google-api-python-client and
-# python-dotenv were removed once the unused Drive-upload helper went: nothing
-# in the app or its dependency tree imports them.
+# transitive tree (re-verified 2026-08-28).
+#
+# google-api-python-client is REQUIRED: app.py imports googleapiclient at module
+# level (lines 21-22) for upload_file_to_drive(). Nothing else in the tree
+# provides it — without this line the app dies with
+# "ModuleNotFoundError: No module named 'googleapiclient'" before any UI loads.
+# The old comment claiming it was unused was wrong and is removed.
+#
+# pytesseract was removed: never imported anywhere. Handwriting and scanned PDFs
+# are transcribed by Gemini's native document vision, which accepts PDFs and
+# images directly and needs no system packages. Delete packages.txt too.
 streamlit==1.62.0
 pandas==3.0.5
 google-genai==2.20.0
 groq==1.7.0
 gspread==6.2.1
 google-auth==2.57.0
+google-api-python-client==2.199.0
 plotly==7.0.0
 authlib==1.7.2
 pydantic==2.13.4
@@ -16,4 +25,3 @@ docx2txt==0.9
 pypdf==6.16.2
 supabase==2.31.0
 requests==2.34.2
-pytesseract==0.3.13
