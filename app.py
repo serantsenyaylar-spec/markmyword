@@ -51,6 +51,11 @@ def setup_logging():
     )
 
 # --- GOOGLE GENAI CONFIG ---
+# Keep provider model identifiers in one place so the staging smoke test can
+# verify the exact models configured for this application.
+GEMINI_MODEL = "gemini-3.7-flash"
+GROQ_MODEL = "openai/gpt-oss-120b"
+
 def configure_google_genai():
     """Configures the Google GenAI client."""
     api_key = get_secret("GEMINI_API_KEY")
