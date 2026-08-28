@@ -17,8 +17,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
-from google import genai
-
+from google.genai import types
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from groq import Groq
