@@ -1,5 +1,43 @@
+# --- Credentials (the important section) ------------------------------------
+# Verified clean: `secrets.toml` and `.env` were never committed, and a scan of
+# all 26 commits found no Google (AIza*, GOCSPX-), Groq (gsk_*), service-account
+# ("private_key") or PEM ("-----BEGIN") credentials anywhere in history.
+#
+# The original file protected the two files the app reads directly, but nothing
+# else. SECURITY.md promises "Streamlit secrets and service credentials" stay
+# out of version control — the service-credential half had no rule behind it.
+# These cover the names Google actually downloads them as.
 .streamlit/secrets.toml
+.streamlit/secrets.*.toml
 .env
+.env.*
+!.env.example
+
+*credentials*.json
+*service-account*.json
+*service_account*.json
+client_secret*.json
+*.pem
+*.p12
+*.key
+id_rsa*
+
+# --- Python / virtualenvs ----------------------------------------------------
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# --- Tool caches -------------------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+
+# --- OS noise ----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.log
