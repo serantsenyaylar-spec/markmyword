@@ -1492,7 +1492,24 @@ def run_groq_structured(client, user_prompt, text_content):
             )
 
         completion = _retry_with_backoff(_complete, label=f"Groq grading ({GROQ_MODEL})")
-        return json.loads(completion.choices[0].message.content)
+
+        # gpt-oss-120b is a reasoning model: it can put the answer in `reasoning`
+        # and leave `content` empty. Without this the json.loads below raises
+        # TypeError, which the handler swallows into {} - so Groq would look
+        # configured and healthy while quietly grading nothing, and the caller
+        # would fall through to Gemini without ever saying why.
+        message = completion.choices[0].message
+        content = getattr(message, "content", None) or getattr(message, "reasoning", None)
+        if not content:
+            logger.warning("[Groq Worker Error]: %s returned no content", GROQ_MODEL)
+            return {}
+        try:
+            return json.loads(content)
+        except ValueError:
+            logger.warning(
+                "[Groq Worker Error]: %s returned non-JSON: %.200r", GROQ_MODEL, content
+            )
+            return {}
 
     except TransientAPIError:
         raise
@@ -1533,7 +1550,7 @@ You MUST output strictly in valid JSON matching this exact structure:
 # - openai/gpt-oss-120b: Groq's recommended replacement for
 #   llama-3.3-70b-versatile, which was shut down on 2026-08-16. Supports
 #   response_format json_object; reasoning is returned in a separate field.
-GEMINI_MODEL = "gemini-3.7-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
 
 
@@ -1726,13 +1743,25 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
 
     raw = {}
     unavailable = False
-    if gemini_client:
+    # Groq grades first. Grading is the more abundant, less contended call, and
+    # moving it off Gemini leaves Gemini doing handwriting only - halving the
+    # calls that hit the model returning 503. Gemini stays on as the fallback for
+    # both quality and availability. Swap these two blocks back to undo this.
+    if groq_client:
         try:
-            raw = run_gemini_structured(gemini_client, GEMINI_MODEL, full_prompt, student_text)
+            raw = run_groq_structured(groq_client, full_prompt, student_text)
         except TransientAPIError as e:
-            logger.warning("Gemini grading skipped for %s: %s", s_file.name, e)
+            logger.warning("Groq grading skipped for %s: %s", s_file.name, e)
             unavailable = True
 
+    if not isinstance(raw, dict) or not raw:
+        if gemini_client:
+            try:
+                raw = run_gemini_structured(gemini_client, GEMINI_MODEL, full_prompt, student_text)
+            except TransientAPIError as e:
+                logger.warning("Gemini grading skipped for %s: %s", s_file.name, e)
+                unavailable = True
+                
     if not isinstance(raw, dict) or not raw:
         if groq_client:
             try:
