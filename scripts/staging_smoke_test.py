@@ -146,7 +146,11 @@ def check_gemini(cfg: dict, constants: dict) -> None:
         response = client.models.generate_content(
             model=model,
             contents="Reply with the single word: OK",
-            config={"max_output_tokens": 8},
+            # gemini-3.7-flash thinks by default (level "medium") and reasoning
+            # tokens count against max_output_tokens. At 8 the model can burn
+            # the whole budget on reasoning and return an empty reply, so the
+            # check "passes" without actually proving a round trip worked.
+            config={"max_output_tokens": 64},
         )
         elapsed = time.monotonic() - started
         text = (response.text or "").strip()
@@ -480,7 +484,7 @@ def main() -> int:
 
     passed = sum(1 for _, s, _ in _results if s == "PASS")
     failed = [(c, d) for c, s, d in _results if s == "FAIL"]
-    skipped = [(c, s, d) for c, s, d in _results if s == "SKIP"]
+    skipped = [(c, d) for c, s, d in _results if s == "SKIP"]
     print(f"\n{passed} passed, {len(failed)} failed, {len(skipped)} skipped")
     for name, detail in failed:
         print(f"  FAIL  {name} — {detail}")
