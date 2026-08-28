@@ -17,6 +17,11 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+# BOTH imports are required and neither substitutes for the other:
+#   genai  -> genai.Client(...)            (4 call sites: lines ~419, 658, 959, 2355)
+#   types  -> types.Part / types.GenerateContentConfig (transcription + grading)
+# Swapping one for the other just moves the NameError.
+from google import genai
 from google.genai import types
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
