@@ -16,3 +16,4 @@ docx2txt==0.9
 pypdf==6.16.2
 supabase==2.31.0
 requests==2.34.2
+pytesseract==0.3.13
