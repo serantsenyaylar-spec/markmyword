@@ -404,11 +404,10 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str, glossary: str 
     if glossary:
         prompt = f"{TRANSCRIPTION_PROMPT}\n{glossary}"
 
-client = genai.Client(api_key="YOUR_GEMINI_API_KEY")
-for m in client.models.list():
-    print(getattr(m, "name", m))
+    client = genai.Client(api_key=gemini_key)
 
     def _generate():
+        
         return client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[
@@ -911,9 +910,8 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
         
         # Generate embeddings if the API key is present
         if gemini_key:
-            client = genai.Client(api_key="YOUR_GEMINI_API_KEY")
+            client = genai.Client(api_key=" ")
 for m in client.models.list():
-    print(getattr(m, "name", m))
             )
             embedding = emb_res.embeddings[0].values
 
@@ -2185,9 +2183,8 @@ with wizard_tab2:
                 gemini_client, groq_client = None, None
                 if gemini_key:
                     try:
-client = genai.Client(api_key="YOUR_GEMINI_API_KEY")
+client = genai.Client(api_key=" ")
 for m in client.models.list():
-    print(getattr(m, "name", m))
                 if groq_key:
                     try:
                         groq_client = Groq(api_key=groq_key)
