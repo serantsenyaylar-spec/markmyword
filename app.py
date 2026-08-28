@@ -25,10 +25,8 @@ from pydantic import BaseModel
 from pypdf import PdfReader
 from supabase import create_client, Client
 import gspread
-from authlib.integrations.httpx_client import AsyncOAuthClient
 import docx2txt
 from PIL import Image
-import pytesseract
 
 # --- UTILITY FUNCTIONS ---
 def get_secret(secret_name: str):
@@ -194,16 +192,6 @@ MAX_PDF_PAGES = 200
 def _extract_meta(source: str, error_code: str = None) -> dict:
     """Build a metadata dict for extraction results."""
     return {"source": source, "error_code": error_code}
-
-def extract_text_from_image(uploaded_file):
-    """Extracts text from PNG/JPG using pytesseract (OCR)."""
-    try:
-        image = Image.open(io.BytesIO(uploaded_file.getbuffer()))
-        text = pytesseract.image_to_string(image)
-        return text.strip() or "", _extract_meta("ocr")
-    except Exception as e:
-        logger.error("OCR error: %s", e)
-        return "", _extract_meta("none", "ocr_failed")
 
 def _extract_text_from_pdf(file_bytes: bytes, filename: str):
     """Extracts text from PDF using pypdf, with fallback to OCR if needed."""
