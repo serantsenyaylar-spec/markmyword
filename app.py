@@ -17,8 +17,8 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
-from google import genai  # Using only the new SDK
-from google.genai import types
+from google import genai
+    
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from groq import Groq
@@ -404,7 +404,9 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str, glossary: str 
     if glossary:
         prompt = f"{TRANSCRIPTION_PROMPT}\n{glossary}"
 
-    client = genai.Client(api_key=gemini_key)
+client = genai.Client(api_key="YOUR_GEMINI_API_KEY")
+for m in client.models.list():
+    print(getattr(m, "name", m))
 
     def _generate():
         return client.models.generate_content(
@@ -909,11 +911,9 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
         
         # Generate embeddings if the API key is present
         if gemini_key:
-            client = genai.Client(api_key=gemini_key)
-            # gemini-embedding-001: text-embedding-004 was shut down 2026-01-14.
-            emb_res = client.models.embed_content(
-                model="gemini-embedding-001",
-                contents=student_text
+            client = genai.Client(api_key="YOUR_GEMINI_API_KEY")
+for m in client.models.list():
+    print(getattr(m, "name", m))
             )
             embedding = emb_res.embeddings[0].values
 
@@ -1550,7 +1550,7 @@ You MUST output strictly in valid JSON matching this exact structure:
 # - openai/gpt-oss-120b: Groq's recommended replacement for
 #   llama-3.3-70b-versatile, which was shut down on 2026-08-16. Supports
 #   response_format json_object; reasoning is returned in a separate field.
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.7-flash"
 GROQ_MODEL = "openai/gpt-oss-120b"
 
 
@@ -2185,9 +2185,9 @@ with wizard_tab2:
                 gemini_client, groq_client = None, None
                 if gemini_key:
                     try:
-                        gemini_client = genai.Client(api_key=gemini_key)
-                    except Exception as e:
-                        st.warning(f"Could not initialize Gemini client: {e}")
+client = genai.Client(api_key="YOUR_GEMINI_API_KEY")
+for m in client.models.list():
+    print(getattr(m, "name", m))
                 if groq_key:
                     try:
                         groq_client = Groq(api_key=groq_key)
