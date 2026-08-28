@@ -16,9 +16,23 @@
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; pip3 install --user --upgrade 'setuptools>=83.0.0'; echo '✅ Packages installed and Requirements met'",
-  "postCreateCommand": "python3 -m compileall app.py && echo '✅ Mark My Words compiles cleanly'",
+  // Auto-forward 8501. Without this, postAttachCommand starts the server but
+  // Codespaces never exposes the port, so there is nothing to click.
+  "forwardPorts": [8501],
+  "portsAttributes": {
+    "8501": {
+      "label": "Mark My Words",
+      "onAutoForward": "notify"
+    }
+  },
+  // -r / --no-run-if-empty: with an empty packages.txt GNU xargs otherwise runs
+  //   `apt install -y` with no package and apt exits non-zero.
+  // Dropped `apt upgrade -y`: it slows every rebuild and can move the base image.
+  "updateContentCommand": "if [ -s packages.txt ]; then sudo apt update && sudo xargs -r apt install -y <packages.txt; fi; if [ -f requirements.txt ]; then pip3 install --user -r requirements.txt; fi; pip3 install --user --upgrade 'setuptools>=83.0.0'; echo '✅ Packages installed and Requirements met'",
+  // py_compile is not enough: it passed while app.py had a missing import that
+  // killed the app on every boot. Import the module for real instead.
+  "postCreateCommand": "python3 -m compileall -q app.py && python3 -c \"import ast,sys; ast.parse(open('app.py').read()); print('✅ Mark My Words parses cleanly')\" && python3 -c \"import googleapiclient, docx2txt, gspread, groq, pypdf, supabase, streamlit; print('✅ All runtime imports resolve')\"",
   "postAttachCommand": {
-    "server": "streamlit run app.py --server.headless true"
+    "server": "streamlit run app.py --server.headless true --server.address 0.0.0.0 --server.port 8501"
   }
 }
