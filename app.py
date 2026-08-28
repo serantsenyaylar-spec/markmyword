@@ -18,7 +18,7 @@ import plotly.express as px
 import requests
 import streamlit as st
 from google import genai
-    
+
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from groq import Groq
@@ -34,6 +34,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
 
 def get_secret(key_name):
     """Return a Streamlit secret or server environment variable, if configured.
@@ -63,6 +64,7 @@ try:
 except Exception as e:
     logger.error("Could not initialize Supabase: %s", e)
 
+
 # 3. DEFINE HELPER FUNCTIONS
 def log_user_login(user_name, user_email):
     """Writes one login audit row per session, after the auth gate succeeded."""
@@ -72,17 +74,20 @@ def log_user_login(user_name, user_email):
 
     if supabase:
         try:
-            supabase.table("user_logs").insert({
-                "user_email": user_email,
-                "action": "User Access",
-                "details": f"Logged in as {user_name}"
-            }).execute()
+            supabase.table("user_logs").insert(
+                {
+                    "user_email": user_email,
+                    "action": "User Access",
+                    "details": f"Logged in as {user_name}",
+                }
+            ).execute()
             st.session_state["login_notified"] = True
         except Exception as e:
             logger.warning("Database logging error: %s", e)
     else:
         # No database configured; nothing to audit, but stop re-checking each run.
         st.session_state["login_notified"] = True
+
 
 def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
     """Sends a push notification to your phone via ntfy.sh."""
@@ -100,19 +105,17 @@ def send_ntfy_alert(message: str, title: str = "Mark My Words Alert"):
             if ntfy_token:
                 headers["Authorization"] = f"Bearer {ntfy_token}"
             requests.post(
-                f"https://ntfy.sh/{topic}",
-                data=message.encode("utf-8"),
-                headers=headers,
-                timeout=5
+                f"https://ntfy.sh/{topic}", data=message.encode("utf-8"), headers=headers, timeout=5
             )
         except Exception as e:
             logger.warning("ntfy alert delivery failed: %s", e)
+
 
 def log_user_session():
     """Logs user access immediately upon page visit."""
     if not supabase:
         return
-        
+
     # Use a different key so it doesn't block the login notification
     if st.session_state.get("page_visited"):
         return
@@ -124,17 +127,16 @@ def log_user_session():
         return
 
     try:
-        supabase.table("user_logs").insert({
-            "user_email": user_email,
-            "action": "User Access",
-            "details": "Opened app session"
-        }).execute()
-        
+        supabase.table("user_logs").insert(
+            {"user_email": user_email, "action": "User Access", "details": "Opened app session"}
+        ).execute()
+
         # Mark session as logged
         st.session_state["page_visited"] = True
         st.session_state["user_email"] = user_email
     except Exception as e:
         logger.warning("Error logging session: %s", e)
+
 
 def _looks_like_extension(file_bytes: bytes, file_extension: str) -> bool:
     """Validates the upload by magic bytes, not just by its filename suffix.
@@ -185,19 +187,25 @@ def _looks_like_extension(file_bytes: bytes, file_extension: str) -> bool:
 # degrades to a slow-but-progressing run instead of a silent multi-hour stall,
 # and nothing that fails is ever cached — re-running the batch later costs only
 # real API calls.
-RETRY_MAX_ATTEMPTS = 8              # first try + 7 retries
-RETRY_BASE_SECONDS = 2.0            # 2s -> 4s -> 8s -> 16s -> 30s (capped below)
+RETRY_MAX_ATTEMPTS = 8  # first try + 7 retries
+RETRY_BASE_SECONDS = 2.0  # 2s -> 4s -> 8s -> 16s -> 30s (capped below)
 RETRY_MAX_SLEEP_SECONDS = 30.0
-RETRY_BUDGET_SECONDS = 120.0        # total sleeping per API call (~2-minute window)
-BATCH_RETRY_COOLDOWN_SECONDS = 30.0 # pause before the batch's second pass
+RETRY_BUDGET_SECONDS = 120.0  # total sleeping per API call (~2-minute window)
+BATCH_RETRY_COOLDOWN_SECONDS = 30.0  # pause before the batch's second pass
 
 _TRANSIENT_HTTP_CODES = frozenset({429, 500, 502, 503, 504})
 # gRPC-style status names Google puts in APIError.status for the same class of
 # failure; "UNKNOWN"/"INTERNAL" are included because the API uses them for
 # transient backend faults on generate_content.
-_TRANSIENT_STATUSES = frozenset({
-    "UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "INTERNAL", "UNKNOWN",
-})
+_TRANSIENT_STATUSES = frozenset(
+    {
+        "UNAVAILABLE",
+        "RESOURCE_EXHAUSTED",
+        "DEADLINE_EXCEEDED",
+        "INTERNAL",
+        "UNKNOWN",
+    }
+)
 # Last resort: substrings that identify a retryable failure when it survives only
 # as prose (httpx transport errors, proxies, older SDK versions).
 _TRANSIENT_MARKERS = (
@@ -256,7 +264,11 @@ def _is_transient_api_error(exc: Exception) -> bool:
     """True when repeating the exact same call has a decent chance of working."""
     for attr in ("code", "status_code"):
         value = getattr(exc, attr, None)
-        if isinstance(value, int) and not isinstance(value, bool) and value in _TRANSIENT_HTTP_CODES:
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value in _TRANSIENT_HTTP_CODES
+        ):
             return True
 
     # genai surfaces the canonical status name ("UNAVAILABLE"); some clients
@@ -307,9 +319,7 @@ def _retry_with_backoff(fn, *, label: str):
                 break
 
             hint = _retry_hint_seconds(exc)
-            delay = hint or min(
-                RETRY_BASE_SECONDS * (2 ** (attempt - 1)), RETRY_MAX_SLEEP_SECONDS
-            )
+            delay = hint or min(RETRY_BASE_SECONDS * (2 ** (attempt - 1)), RETRY_MAX_SLEEP_SECONDS)
             if not hint:
                 # Jitter: five papers from one batch must not retry in lockstep.
                 # Sleep jitter only, never a security decision, so the standard
@@ -319,8 +329,11 @@ def _retry_with_backoff(fn, *, label: str):
 
             logger.warning(
                 "%s: transient failure on attempt %d/%d (%s); retrying in %.1fs",
-                label, attempt, RETRY_MAX_ATTEMPTS,
-                " ".join(str(exc).split())[:200], delay,
+                label,
+                attempt,
+                RETRY_MAX_ATTEMPTS,
+                " ".join(str(exc).split())[:200],
+                delay,
             )
             if delay > 0:
                 time.sleep(delay)
@@ -407,7 +420,7 @@ def _transcribe_document_bytes(file_bytes: bytes, mime_type: str, glossary: str 
     client = genai.Client(api_key=gemini_key)
 
     def _generate():
-        
+
         return client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[
@@ -486,9 +499,11 @@ def _fetch_transcript_corrections(teacher_email: str, class_tag: str):
     if not supabase or not teacher_email:
         return []
     try:
-        query = supabase.table("transcript_corrections").select(
-            "wrong_text, right_text, hit_count, class_tag"
-        ).eq("teacher_email", teacher_email)
+        query = (
+            supabase.table("transcript_corrections")
+            .select("wrong_text, right_text, hit_count, class_tag")
+            .eq("teacher_email", teacher_email)
+        )
         if class_tag:
             query = query.eq("class_tag", class_tag)
         res = query.order("hit_count", desc=True).limit(MAX_GLOSSARY_ENTRIES).execute()
@@ -564,8 +579,9 @@ def _diff_corrections(original: str, corrected: str, max_pairs: int = 12):
     return pairs
 
 
-def save_transcript_corrections(teacher_email: str, class_tag: str, source_file: str,
-                                original: str, corrected: str) -> int:
+def save_transcript_corrections(
+    teacher_email: str, class_tag: str, source_file: str, original: str, corrected: str
+) -> int:
     """Persists a teacher's transcript fixes so future papers read better.
 
     Returns the number of correction pairs learned.
@@ -577,10 +593,16 @@ def save_transcript_corrections(teacher_email: str, class_tag: str, source_file:
     learned = 0
     for wrong, right in pairs:
         try:
-            existing = supabase.table("transcript_corrections").select("id, hit_count") \
-                .eq("teacher_email", teacher_email) \
-                .eq("class_tag", class_tag or "") \
-                .eq("wrong_text", wrong).eq("right_text", right).limit(1).execute()
+            existing = (
+                supabase.table("transcript_corrections")
+                .select("id, hit_count")
+                .eq("teacher_email", teacher_email)
+                .eq("class_tag", class_tag or "")
+                .eq("wrong_text", wrong)
+                .eq("right_text", right)
+                .limit(1)
+                .execute()
+            )
 
             if existing.data:
                 row = existing.data[0]
@@ -588,13 +610,15 @@ def save_transcript_corrections(teacher_email: str, class_tag: str, source_file:
                     {"hit_count": int(row.get("hit_count", 1)) + 1}
                 ).eq("id", row["id"]).execute()
             else:
-                supabase.table("transcript_corrections").insert({
-                    "teacher_email": teacher_email,
-                    "class_tag": class_tag or "",
-                    "source_file": source_file,
-                    "wrong_text": wrong,
-                    "right_text": right,
-                }).execute()
+                supabase.table("transcript_corrections").insert(
+                    {
+                        "teacher_email": teacher_email,
+                        "class_tag": class_tag or "",
+                        "source_file": source_file,
+                        "wrong_text": wrong,
+                        "right_text": right,
+                    }
+                ).execute()
             learned += 1
         except Exception as e:
             logger.warning("Could not save transcript correction: %s", e)
@@ -646,10 +670,17 @@ def _fetch_graded_exemplars(teacher_email: str, rubric_type: str):
     if not supabase or not teacher_email:
         return []
     try:
-        res = supabase.table("essay_memory").select(
-            "essay_text, score, teacher_feedback, red_pen_corrections, embedding, rubric_type"
-        ).eq("teacher_email", teacher_email).eq("rubric_type", rubric_type) \
-            .order("created_at", desc=True).limit(100).execute()
+        res = (
+            supabase.table("essay_memory")
+            .select(
+                "essay_text, score, teacher_feedback, red_pen_corrections, embedding, rubric_type"
+            )
+            .eq("teacher_email", teacher_email)
+            .eq("rubric_type", rubric_type)
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
         return res.data or []
     except Exception as e:
         logger.warning("Could not load graded exemplars: %s", e)
@@ -704,8 +735,8 @@ def build_calibration_text(student_text: str, teacher_email: str, rubric_type: s
         "teacher's severity and feedback style. They are reference points for "
         "standard-setting only — grade the new submission on its own merits against "
         "the rubric, and never copy their content.\n"
-        + "\n".join(blocks) +
-        "\n</teacher_calibration>"
+        + "\n".join(blocks)
+        + "\n</teacher_calibration>"
     )
 
 
@@ -766,8 +797,8 @@ def _extract_meta(source: str, error_code: str = ""):
     would only waste another API call.
     """
     return {
-        "source": source,               # "text_layer" | "vision" | "document" | "none"
-        "error_code": error_code,       # see transcribe_submission / "" when fine
+        "source": source,  # "text_layer" | "vision" | "document" | "none"
+        "error_code": error_code,  # see transcribe_submission / "" when fine
         "transient": error_code == "unavailable",
     }
 
@@ -858,19 +889,23 @@ def extract_text_with_status(uploaded_file):
         )
         return "", _extract_meta("none", "too_large")
 
-    file_extension = uploaded_file.name.split('.')[-1].lower()
+    file_extension = uploaded_file.name.split(".")[-1].lower()
     if not _looks_like_extension(file_bytes, file_extension):
-        st.error(f"⚠️ {uploaded_file.name} does not look like a real .{file_extension} file. Skipped.")
+        st.error(
+            f"⚠️ {uploaded_file.name} does not look like a real .{file_extension} file. Skipped."
+        )
         return "", _extract_meta("none", "bad_extension")
 
     try:
-        if file_extension == 'pdf':
+        if file_extension == "pdf":
             return _extract_text_from_pdf(file_bytes, uploaded_file.name)
-        elif file_extension == 'docx':
-            return (docx2txt.process(io.BytesIO(file_bytes)) or "").strip(), _extract_meta("document")
-        elif file_extension == 'txt':
+        elif file_extension == "docx":
+            return (docx2txt.process(io.BytesIO(file_bytes)) or "").strip(), _extract_meta(
+                "document"
+            )
+        elif file_extension == "txt":
             return file_bytes.decode("utf-8", errors="ignore").strip(), _extract_meta("document")
-        elif file_extension in ('png', 'jpg', 'jpeg'):
+        elif file_extension in ("png", "jpg", "jpeg"):
             return extract_text_from_image(uploaded_file)
         return "", _extract_meta("none", "unsupported_type")
     except Exception as e:
@@ -893,7 +928,19 @@ def extract_text_from_image(uploaded_file):
     _report_transcription_error(uploaded_file.name, error_code)
     return "", _extract_meta("none", error_code)
 
-def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, teacher_score, teacher_feedback, red_pen_corrections="", teacher_email="", class_tag="", was_handwritten=False):
+
+def save_teacher_exemplar(
+    student_name,
+    student_text,
+    rubric_type,
+    ai_score,
+    teacher_score,
+    teacher_feedback,
+    red_pen_corrections="",
+    teacher_email="",
+    class_tag="",
+    was_handwritten=False,
+):
     """Saves evaluation records to Supabase vector memory using Student Full Name.
 
     The stored embedding + final teacher score are what build_calibration_text
@@ -907,11 +954,12 @@ def save_teacher_exemplar(student_name, student_text, rubric_type, ai_score, tea
     try:
         gemini_key = get_secret("GEMINI_API_KEY")
         embedding = []
-        
+
         # Generate embeddings if the API key is present
         if gemini_key:
-            client = genai.Client(api_key=" ")
-for m in client.models.list():
+            client = genai.Client(api_key=gemini_key)
+            emb_res = client.models.embed_content(
+                model="gemini-embedding-001", contents=student_text
             )
             embedding = emb_res.embeddings[0].values
 
@@ -928,9 +976,9 @@ for m in client.models.list():
             "class_tag": class_tag or "",
             "was_handwritten": bool(was_handwritten),
         }
-        
+
         if embedding:
-             payload["embedding"] = embedding
+            payload["embedding"] = embedding
 
         supabase.table("essay_memory").insert(payload).execute()
         # This new exemplar must be visible to the next calibration lookup.
@@ -938,7 +986,8 @@ for m in client.models.list():
         st.success("Exemplar saved — future grading will calibrate against it.")
     except Exception as e:
         st.error(f"Could not save exemplar to database: {e}")
-        
+
+
 # 4. APP EXECUTION
 
 # NOTE: Access logging intentionally happens only AFTER authentication (see
@@ -946,6 +995,7 @@ for m in client.models.list():
 
 # Safely fetch user email from session state for use in the rest of your app
 USER_EMAIL = st.session_state.get("user_email")
+
 
 # --- PYDANTIC SCHEMA FOR GEMINI STRUCTURED OUTPUT ---
 class GradingOutput(BaseModel):
@@ -959,7 +1009,8 @@ class GradingOutput(BaseModel):
     score_accuracy: float
     total_score: float
     feedback: str
-    
+
+
 # --- SECRETS & AUTH HELPERS ---
 def get_google_credentials():
     """Unified Google OAuth2 Service Account Credentials helper."""
@@ -968,18 +1019,22 @@ def get_google_credentials():
         return None
     try:
         from google.oauth2.service_account import Credentials
-        creds_json = json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+
+        creds_json = (
+            json.loads(creds_secret) if isinstance(creds_secret, str) else dict(creds_secret)
+        )
         # Least-privilege scopes: only files this app creates in Drive, plus
         # the grading spreadsheet. Full drive scope was removed.
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive.file"
+            "https://www.googleapis.com/auth/drive.file",
         ]
         return Credentials.from_service_account_info(creds_json, scopes=scopes)
     except Exception as e:
         logger.error("Error initializing Google credentials: %s", e)
         return None
-        
+
+
 # --- CONFIGURATION & CONSTANTS ---
 DRIVE_FOLDER_ID = get_secret("DRIVE_FOLDER_ID")
 SHEET_ID = get_secret("SHEET_ID")
@@ -1003,14 +1058,25 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB per uploaded file
 # marked as a local/dev/test environment *and* set both bypass switches.
 DEV_ENVIRONMENTS = frozenset({"development", "dev", "local", "test"})
 APP_ENV = str(get_secret("APP_ENV") or "").strip().lower()
-DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or "").strip().lower() in ("true", "1", "yes", "on")
-ALLOW_DEV_BYPASS = str(get_secret("ALLOW_DEV_BYPASS") or "").strip().lower() in ("true", "1", "yes", "on")
+DEV_AUTH_BYPASS = str(get_secret("DEV_AUTH_BYPASS") or "").strip().lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
+ALLOW_DEV_BYPASS = str(get_secret("ALLOW_DEV_BYPASS") or "").strip().lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
 if DEV_AUTH_BYPASS and (not ALLOW_DEV_BYPASS or APP_ENV not in DEV_ENVIRONMENTS):
     logger.warning(
         "DEV_AUTH_BYPASS ignored: it requires ALLOW_DEV_BYPASS and APP_ENV in %s.",
         sorted(DEV_ENVIRONMENTS),
     )
     DEV_AUTH_BYPASS = False
+
 
 # --- IDENTITY & AUTHENTICATION HELPERS ---
 def normalize_email(email):
@@ -1019,6 +1085,7 @@ def normalize_email(email):
         return ""
     return str(email).strip().lower()
 
+
 def is_allowed_domain(email):
     """Return True when the email belongs to the configured allowed domain."""
     normalized = normalize_email(email)
@@ -1026,6 +1093,7 @@ def is_allowed_domain(email):
         return False
     domain = ALLOWED_DOMAIN.lower().lstrip("@")
     return normalized.endswith("@" + domain)
+
 
 def extract_user_identity():
     # In a deliberately enabled local bypass, do not let an incidental test or
@@ -1067,6 +1135,7 @@ def extract_user_identity():
 
     return user_email, user_name or "Teacher User"
 
+
 def _dev_bypass_identity():
     """Build a synthetic identity for local testing when bypass is enabled."""
     email = normalize_email(
@@ -1076,11 +1145,16 @@ def _dev_bypass_identity():
     )
     if not email:
         return None
-    if not is_allowed_domain(email) and not any(normalize_email(admin) == email for admin in ADMIN_EMAILS):
+    if not is_allowed_domain(email) and not any(
+        normalize_email(admin) == email for admin in ADMIN_EMAILS
+    ):
         st.warning("🧪 Dev auth bypass ignored: configured bypass email is not authorized.")
         return None
-    name = (get_secret("DEV_AUTH_BYPASS_NAME") or os.getenv("DEV_AUTH_BYPASS_NAME") or "Dev Teacher").strip()
+    name = (
+        get_secret("DEV_AUTH_BYPASS_NAME") or os.getenv("DEV_AUTH_BYPASS_NAME") or "Dev Teacher"
+    ).strip()
     return {"email": email, "name": name or "Dev Teacher", "dev_bypass": True}
+
 
 def check_authentication():
     is_logged_in = getattr(st.user, "is_logged_in", False) if hasattr(st, "user") else False
@@ -1100,7 +1174,9 @@ def check_authentication():
         st.stop()
 
     if st.session_state.get("dev_bypass_active"):
-        st.warning("🧪 **DEV-ONLY AUTH BYPASS ACTIVE** — Google login is skipped. Anyone who can reach this server is authenticated as the configured dev teacher. Do NOT run with this flag in a hosted environment.")
+        st.warning(
+            "🧪 **DEV-ONLY AUTH BYPASS ACTIVE** — Google login is skipped. Anyone who can reach this server is authenticated as the configured dev teacher. Do NOT run with this flag in a hosted environment."
+        )
 
     user_email, user_name = extract_user_identity()
     user_email = normalize_email(user_email)
@@ -1115,25 +1191,31 @@ def check_authentication():
         st.stop()
 
     with st.sidebar:
-        st.markdown("""
+        st.markdown(
+            """
         <div style="background-color: rgba(40, 167, 69, 0.12); border: 1px solid #28a745; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
             <span style="height: 10px; width: 10px; background-color: #28a745; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px #28a745;"></span>
             <span style="color: #28a745; font-weight: 700; font-size: 0.85rem;">Connection: Active</span>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         name_parts = user_name.strip().split(" ", 1)
         first_name = name_parts[0] if len(name_parts) > 0 else "Teacher"
         surname = name_parts[1] if len(name_parts) > 1 else "—"
 
         st.markdown("### 👤 **Account Details**")
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="user-card" style="background-color: var(--secondary-background-color); padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); margin-bottom: 15px;">
             <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>First Name:</b> {html.escape(first_name)}</div>
             <div style="font-size: 0.88rem; margin-bottom: 4px;"><b>Surname:</b> {html.escape(surname)}</div>
             <div style="font-size: 0.82rem; opacity: 0.85; word-break: break-all;"><b>Mail:</b> {html.escape(user_email or 'Verified User')}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         if is_admin:
             st.success("👑 **Admin Status: Active**")
@@ -1142,7 +1224,9 @@ def check_authentication():
                 st.session_state.graded_batch = []
                 st.rerun()
         else:
-            st.info(f"📊 **Session Usage:** {st.session_state.get('graded_count', 0)}/{MAX_PAPERS_PER_SESSION} papers")
+            st.info(
+                f"📊 **Session Usage:** {st.session_state.get('graded_count', 0)}/{MAX_PAPERS_PER_SESSION} papers"
+            )
 
         st.divider()
 
@@ -1157,23 +1241,46 @@ def check_authentication():
         )
 
         st.divider()
-        
+
         st.markdown("### 🌐 **Workspace Links**")
         workspace_links = [
-            {"name": "Gmail", "url": "https://mail.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png"},
-            {"name": "Google Drive", "url": "https://drive.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"},
-            {"name": "Google Sheets", "url": "https://docs.google.com/spreadsheets", "icon": "https://ssl.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png"},
-            {"name": "Google Docs", "url": "https://docs.google.com/document", "icon": "https://ssl.gstatic.com/images/branding/product/1x/docs_2020q4_48dp.png"},
-            {"name": "Google Calendar", "url": "https://calendar.google.com", "icon": "https://ssl.gstatic.com/images/branding/product/1x/calendar_2020q4_48dp.png"}
+            {
+                "name": "Gmail",
+                "url": "https://mail.google.com",
+                "icon": "https://ssl.gstatic.com/images/branding/product/1x/gmail_2020q4_48dp.png",
+            },
+            {
+                "name": "Google Drive",
+                "url": "https://drive.google.com",
+                "icon": "https://ssl.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png",
+            },
+            {
+                "name": "Google Sheets",
+                "url": "https://docs.google.com/spreadsheets",
+                "icon": "https://ssl.gstatic.com/images/branding/product/1x/sheets_2020q4_48dp.png",
+            },
+            {
+                "name": "Google Docs",
+                "url": "https://docs.google.com/document",
+                "icon": "https://ssl.gstatic.com/images/branding/product/1x/docs_2020q4_48dp.png",
+            },
+            {
+                "name": "Google Calendar",
+                "url": "https://calendar.google.com",
+                "icon": "https://ssl.gstatic.com/images/branding/product/1x/calendar_2020q4_48dp.png",
+            },
         ]
 
         for item in workspace_links:
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <a href="{item['url']}" target="_blank" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 6px 8px; border-radius: 6px;">
                 <img src="{item['icon']}" width="20" height="20" style="object-fit: contain;"/>
                 <span style="font-size: 0.9rem; font-weight: 500;">{item['name']}</span>
             </a>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
         st.divider()
         if st.button("Log out", width="stretch", key="sidebar_logout_btn"):
@@ -1181,7 +1288,8 @@ def check_authentication():
             st.logout()
 
     return is_admin, user_email, user_name
-    
+
+
 # --- EXECUTE AUTHENTICATION ---
 # 1. First, check who is logging in.
 IS_ADMIN, USER_EMAIL, USER_NAME = check_authentication()
@@ -1195,7 +1303,8 @@ log_user_login(USER_NAME, USER_EMAIL)
 log_user_session()
 
 # --- ENHANCED UI & CSS STYLING (DARK MODE) ---
-st.markdown("""
+st.markdown(
+    """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
@@ -1286,7 +1395,9 @@ st.markdown("""
     .wizard-line { position: absolute; top: 22px; left: 50%; right: -50%; height: 3px; background-color: #334155; z-index: 0; }
     .wizard-step:last-child .wizard-line { display: none; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # --- SESSION STATE INITIALIZATION ---
 default_states = {
@@ -1304,7 +1415,8 @@ default_states = {
 for key, val in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = val
-        
+
+
 # --- GOOGLE WORKSPACE DRIVE & SHEETS ---
 def upload_file_to_drive(file_bytes, filename, folder_id, mime_type):
     """Uploads the file to Google Drive using unified credentials."""
@@ -1313,18 +1425,21 @@ def upload_file_to_drive(file_bytes, filename, folder_id, mime_type):
         if not creds or not folder_id:
             print(f"Skipping Drive Upload for {filename}: Missing credentials or target folder ID.")
             return None
-            
-        service = build('drive', 'v3', credentials=creds)
-        file_metadata = {'name': filename, 'parents': [folder_id]}
+
+        service = build("drive", "v3", credentials=creds)
+        file_metadata = {"name": filename, "parents": [folder_id]}
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
-        
-        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        return file.get('id')
+
+        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        return file.get("id")
     except Exception as e:
         print(f"Drive Upload Error: {e}")
         return None
 
-def save_grade(user_name, user_email, student_id, assignment_type, final_score, word_count, total_scale):
+
+def save_grade(
+    user_name, user_email, student_id, assignment_type, final_score, word_count, total_scale
+):
     """Appends a new row to the Google Sheet with grading results."""
     try:
         creds = get_google_credentials()
@@ -1333,20 +1448,30 @@ def save_grade(user_name, user_email, student_id, assignment_type, final_score, 
             return False
 
         client = gspread.authorize(creds)
-        
+
         sheet_id = get_secret("SHEET_ID")
         if sheet_id:
             sheet = client.open_by_key(sheet_id).sheet1
         else:
             sheet = client.open("İstek_Schools_Grading_Database").sheet1
-        
+
         timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        row = [timestamp, user_name, user_email, student_id, assignment_type, final_score, total_scale, word_count]
+        row = [
+            timestamp,
+            user_name,
+            user_email,
+            student_id,
+            assignment_type,
+            final_score,
+            total_scale,
+            word_count,
+        ]
         sheet.append_row(row)
         return True
     except Exception as e:
         print(f"Sheets Save Error: {e}")
         return False
+
 
 # --- INDIVIDUAL STUDENT REPORTS (brief §7a) ---------------------------------
 # One plain-text report per student, built from the same record the teacher just
@@ -1415,6 +1540,7 @@ def build_reports_zip(batch: list, target_scale, teacher_name: str = "") -> byte
             )
     return buffer.getvalue()
 
+
 # --- AI EVALUATION HELPERS ---
 def run_gemini_structured(client, model_name, user_prompt, student_text):
     """Executes Gemini API and returns parsed JSON, or {} on failure.
@@ -1442,7 +1568,9 @@ def run_gemini_structured(client, model_name, user_prompt, student_text):
                 model=model_name,
                 contents=[
                     types.Part.from_text(text=user_content),
-                    types.Part.from_text(text=f"<student_submission>\n{student_text}\n</student_submission>"),
+                    types.Part.from_text(
+                        text=f"<student_submission>\n{student_text}\n</student_submission>"
+                    ),
                 ],
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
@@ -1460,6 +1588,7 @@ def run_gemini_structured(client, model_name, user_prompt, student_text):
         logger.warning("[Gemini Worker Error] %s: %s", model_name, e)
         return {}
 
+
 def run_groq_structured(client, user_prompt, text_content):
     """Executes Groq API safely across main or background threads.
 
@@ -1476,7 +1605,9 @@ def run_groq_structured(client, user_prompt, text_content):
             system_content = system_part.strip()
             user_content = sep + user_part
         else:
-            system_content = "You are an expert academic evaluator. Return JSON matching the expected schema."
+            system_content = (
+                "You are an expert academic evaluator. Return JSON matching the expected schema."
+            )
             user_content = user_prompt
 
         def _complete():
@@ -1484,9 +1615,12 @@ def run_groq_structured(client, user_prompt, text_content):
                 model=GROQ_MODEL,
                 messages=[
                     {"role": "system", "content": system_content},
-                    {"role": "user", "content": f"{user_content}\n\n<student_submission>\n{text_content}\n</student_submission>"}
+                    {
+                        "role": "user",
+                        "content": f"{user_content}\n\n<student_submission>\n{text_content}\n</student_submission>",
+                    },
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
 
         completion = _retry_with_backoff(_complete, label=f"Groq grading ({GROQ_MODEL})")
@@ -1504,9 +1638,7 @@ def run_groq_structured(client, user_prompt, text_content):
         try:
             return json.loads(content)
         except ValueError:
-            logger.warning(
-                "[Groq Worker Error]: %s returned non-JSON: %.200r", GROQ_MODEL, content
-            )
+            logger.warning("[Groq Worker Error]: %s returned non-JSON: %.200r", GROQ_MODEL, content)
             return {}
 
     except TransientAPIError:
@@ -1514,7 +1646,8 @@ def run_groq_structured(client, user_prompt, text_content):
     except Exception as e:
         logger.warning("[Groq Worker Error]: %s", e)
         return {}
-        
+
+
 # --- EVALUATION RUNNERS ---
 SYSTEM_PROMPT = """You are a veteran CEFR B1+ high school English examiner.
 Evaluate the student essay STRICTLY against the rubric in <rubric_data> and the assignment prompt in <assignment_question>.
@@ -1585,7 +1718,7 @@ def _band_value(column) -> float | None:
     text = str(column).strip().lower()
     for prefix in ("band ", "pts", "pt", "point", "points", "score", "mark"):
         if text.startswith(prefix):
-            text = text[len(prefix):].strip()
+            text = text[len(prefix) :].strip()
         if text.endswith(prefix):
             text = text[: -len(prefix)].strip()
     try:
@@ -1640,9 +1773,24 @@ def parse_rubric_csv(file_bytes: bytes) -> tuple[str, float | None]:
         points_col = descriptor_col = None
         for col in frame.columns[1:]:
             label = str(col).strip().lower()
-            if points_col is None and label in ("points", "point", "pts", "score", "band", "mark", "level"):
+            if points_col is None and label in (
+                "points",
+                "point",
+                "pts",
+                "score",
+                "band",
+                "mark",
+                "level",
+            ):
                 points_col = col
-            elif descriptor_col is None and label in ("description", "descriptor", "detail", "details", "criteria", "text"):
+            elif descriptor_col is None and label in (
+                "description",
+                "descriptor",
+                "detail",
+                "details",
+                "criteria",
+                "text",
+            ):
                 descriptor_col = col
         if points_col is None and len(frame.columns) >= 2:
             points_col = frame.columns[1]
@@ -1759,7 +1907,7 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
             except TransientAPIError as e:
                 logger.warning("Gemini grading skipped for %s: %s", s_file.name, e)
                 unavailable = True
-                
+
     if not isinstance(raw, dict) or not raw:
         if groq_client:
             try:
@@ -1777,6 +1925,7 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
         item["text"] = student_text
         item["calibrated"] = bool(calibration_text)
     return item, False
+
 
 # --- HEADER & STEPPER ---
 col_logo, col_title, col_time = st.columns([1, 3, 1], vertical_alignment="center")
@@ -1835,11 +1984,12 @@ with col_time:
     )
 
 # Active state tracking for the wizard UI
-active_1 = "active" if st.session_state.get('active_step', 1) >= 1 else ""
-active_2 = "active" if st.session_state.get('active_step', 1) >= 2 else ""
-active_3 = "active" if st.session_state.get('active_step', 1) >= 3 else ""
+active_1 = "active" if st.session_state.get("active_step", 1) >= 1 else ""
+active_2 = "active" if st.session_state.get("active_step", 1) >= 2 else ""
+active_3 = "active" if st.session_state.get("active_step", 1) >= 3 else ""
 
-st.markdown(f"""
+st.markdown(
+    f"""
 <div class="wizard-container">
     <div class="wizard-step {active_1}">
         <div class="wizard-icon">⚙️</div>
@@ -1856,23 +2006,25 @@ st.markdown(f"""
         <div class="wizard-label">Step 3: Analytics</div>
     </div>
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # --- WIZARD TABS ---
 if IS_ADMIN:
-    tabs = st.tabs([
-        "⚙️ Step 1: Setup", 
-        "📤 Step 2: Upload & Process", 
-        "📊 Step 3: Class Analytics & Reports",
-        "🔐 Admin: System Logs"
-    ])
+    tabs = st.tabs(
+        [
+            "⚙️ Step 1: Setup",
+            "📤 Step 2: Upload & Process",
+            "📊 Step 3: Class Analytics & Reports",
+            "🔐 Admin: System Logs",
+        ]
+    )
     wizard_tab1, wizard_tab2, wizard_tab3, admin_tab = tabs[0], tabs[1], tabs[2], tabs[3]
 else:
-    tabs = st.tabs([
-        "⚙️ Step 1: Setup", 
-        "📤 Step 2: Upload & Process", 
-        "📊 Step 3: Class Analytics & Reports"
-    ])
+    tabs = st.tabs(
+        ["⚙️ Step 1: Setup", "📤 Step 2: Upload & Process", "📊 Step 3: Class Analytics & Reports"]
+    )
     wizard_tab1, wizard_tab2, wizard_tab3 = tabs[0], tabs[1], tabs[2]
     admin_tab = None
 
@@ -1896,21 +2048,21 @@ PRELOADED_TASKS = {
                 3: "Fully answers question; clear opinion AND at least 1 reason/example; uses linking words; word count strictly 70-90 words.",
                 2: "Contains opinion but lacks specific reason/example OR missing 1 prompt element; word count 60-69 or 91-100 words.",
                 1: "Addresses only a fraction of prompt; repetitive/contradictory; word count under 60 or over 100 words.",
-                0: "Does not answer question; unrelated topic; text too short."
+                0: "Does not answer question; unrelated topic; text too short.",
             },
             "Organization & Style (0-3 pts)": {
                 3: "Clear single-paragraph format; logical sequential order; 0–2 punctuation errors.",
                 2: "Paragraph structure present but abrupt transitions; 3–5 punctuation errors.",
                 1: "Lacks clear paragraph structure (disconnected list); 6–8 punctuation errors.",
-                0: "No identifiable structure; unreadable."
+                0: "No identifiable structure; unreadable.",
             },
             "Accuracy (0-3 pts)": {
                 3: "Mostly correct B1+ grammar/structure; 0–2 grammatical/spelling errors.",
                 2: "3–5 grammatical or spelling errors; core meaning understandable.",
                 1: "6–8 grammatical or spelling errors; frequently forces guessing meaning.",
-                0: "9+ errors; text completely incomprehensible."
-            }
-        }
+                0: "9+ errors; text completely incomprehensible.",
+            },
+        },
     },
     "Guided Essay Writing (B1+)": {
         "question": "What can individuals and governments do to reduce plastic pollution in the oceans?\nWrite an essay (120–150 words).",
@@ -1929,22 +2081,22 @@ PRELOADED_TASKS = {
                 3: "Includes all 5 elements (problem, individual action, gov action, example, conclusion); word count strictly 120-150 words.",
                 2: "Misses exactly 1 of 5 required prompt elements; word count 105-119 or 151-165 words.",
                 1: "Misses 2 or more required prompt elements; word count under 105 or over 165 words.",
-                0: "Contains 0 required elements OR response completely irrelevant."
+                0: "Contains 0 required elements OR response completely irrelevant.",
             },
             "Organization & Style (0-3 pts)": {
                 3: "At least 3 distinct paragraphs (Intro, Body, Conclusion); logical flow; 0–3 punctuation errors.",
                 2: "Flawed structure (e.g., 2 paragraphs or weak conclusion); 4–6 punctuation errors.",
                 1: "Single block text; weak structure; 7–9 punctuation errors.",
-                0: "No identifiable structure; unreadable."
+                0: "No identifiable structure; unreadable.",
             },
             "Accuracy (0-3 pts)": {
                 3: "B1+ level vocabulary; minor errors do not obscure meaning; 0–3 grammatical/spelling errors.",
                 2: "4–6 grammatical or spelling errors; core meaning understandable.",
                 1: "7–9 grammatical or spelling errors; forces reader to guess meaning.",
-                0: "10+ errors; text completely incomprehensible."
-            }
-        }
-    }
+                0: "10+ errors; text completely incomprehensible.",
+            },
+        },
+    },
 }
 
 # ==========================================
@@ -1952,21 +2104,28 @@ PRELOADED_TASKS = {
 # ==========================================
 with wizard_tab1:
     st.markdown("### 📋 Evaluation Settings & Preloaded Rubrics")
-    
+
     col_t1a, col_t1b = st.columns(2)
     with col_t1a:
         preset = st.selectbox(
             "Select Assessment Prompt / Framework",
-            ["Guided Paragraph Writing (B1+)", "Guided Essay Writing (B1+)", "Custom Rubric Builder"],
+            [
+                "Guided Paragraph Writing (B1+)",
+                "Guided Essay Writing (B1+)",
+                "Custom Rubric Builder",
+            ],
             index=0,
-            key="preset_select"
+            key="preset_select",
         )
         st.session_state.preset_template = preset
-        
+
         target_scale = st.number_input(
             "Target Grading Scale (Total Max Points)",
-            min_value=9, max_value=500, value=100, step=1,
-            key="scale_input"
+            min_value=9,
+            max_value=500,
+            value=100,
+            step=1,
+            key="scale_input",
         )
         st.session_state.total_rubric_scale = target_scale
 
@@ -1993,24 +2152,28 @@ with wizard_tab1:
         st.session_state.active_question = task_info["question"]
         st.session_state.active_expected = task_info["expected"]
         st.session_state.active_rubric = task_info["rubric"]
-        
+
         st.markdown(f"#### 📌 Active Prompt: **{preset}**")
         st.info(f"**Question:** {task_info['question']}")
-        st.caption(f"**Target Length:** {task_info['word_count_min']}–{task_info['word_count_max']} words")
-        
+        st.caption(
+            f"**Target Length:** {task_info['word_count_min']}–{task_info['word_count_max']} words"
+        )
+
         with st.expander("🎯 **View Expected Answer & Grading Key**", expanded=True):
             st.markdown(task_info["expected"])
 
         st.markdown("#### ⚖️ Exact CEFR B1+ Rubric Criteria (0–3 Scale per Category)")
-        
+
         r_cols = st.columns(3)
         for idx, (cat_name, band_dict) in enumerate(task_info["rubric"].items()):
             with r_cols[idx]:
                 st.markdown(f"**{cat_name}**")
                 for pts in [3, 2, 1, 0]:
                     st.caption(f"**{pts} Pts:** {band_dict[pts]}")
-        
-        st.caption(f"💡 Scores across Task Achievement (3), Organization (3), and Accuracy (3) total **9 raw points**, automatically mapped to your **{target_scale} pts** target scale.")
+
+        st.caption(
+            f"💡 Scores across Task Achievement (3), Organization (3), and Accuracy (3) total **9 raw points**, automatically mapped to your **{target_scale} pts** target scale."
+        )
 
     else:
         st.markdown("#### 🛠️ Custom Rubric Uploader")
@@ -2023,9 +2186,11 @@ with wizard_tab1:
             "• `criterion,3,2,1,0` (one column per point band)\n"
             "• `criterion,points,description`"
         )
-        
-        rubric_file = st.file_uploader("Upload Document", type=["txt", "docx", "pdf", "csv"], key="rubric_file_uploader")
-        
+
+        rubric_file = st.file_uploader(
+            "Upload Document", type=["txt", "docx", "pdf", "csv"], key="rubric_file_uploader"
+        )
+
         if rubric_file is not None:
             suffix = rubric_file.name.rsplit(".", 1)[-1].lower() if "." in rubric_file.name else ""
             if suffix == "csv":
@@ -2054,16 +2219,18 @@ with wizard_tab1:
                 st.session_state.custom_rubric_prompt = custom_text
                 st.success(f"✅ Successfully uploaded and processed: **{rubric_file.name}**")
 
-    st.success("✅ Assessment prompt and rubric locked into memory! Proceed to **Batch Processing**.")
+    st.success(
+        "✅ Assessment prompt and rubric locked into memory! Proceed to **Batch Processing**."
+    )
 
 # ==========================================
 # --- TAB 2: BATCH PROCESSING ---
 # ==========================================
 with wizard_tab2:
     st.markdown("### 📤 Process Submissions")
-    
+
     col_u1, col_u2 = st.columns(2)
-    
+
     with col_u1:
         st.markdown("#### 1. Active Question & Prompt")
         # Editable text box pre-filled from Tab 1 selection
@@ -2072,7 +2239,7 @@ with wizard_tab2:
             value=st.session_state.get("active_question", ""),
             height=140,
             key="tab2_prompt_input",
-            help="You can edit or paste a new prompt here before running batch evaluation."
+            help="You can edit or paste a new prompt here before running batch evaluation.",
         )
         # Store modifications directly into session state
         st.session_state.active_question = edited_prompt
@@ -2145,7 +2312,8 @@ with wizard_tab2:
                 )
 
             image_uploads = [
-                uploaded for uploaded in student_files
+                uploaded
+                for uploaded in student_files
                 if uploaded.name.rsplit(".", 1)[-1].lower() in {"png", "jpg", "jpeg"}
             ]
             if image_uploads:
@@ -2167,7 +2335,7 @@ with wizard_tab2:
             )
 
     st.divider()
-    
+
     if st.button("🚀 Start AI Batch Assessment", type="primary", width="stretch"):
         if not student_files:
             st.warning("Please upload at least one student submission before evaluating.")
@@ -2176,15 +2344,18 @@ with wizard_tab2:
         else:
             gemini_key = get_secret("GEMINI_API_KEY")
             groq_key = get_secret("GROQ_API_KEY")
-            
+
             if not gemini_key and not groq_key:
-                st.error("Missing API Keys! Please set GEMINI_API_KEY or GROQ_API_KEY in Streamlit Secrets.")
+                st.error(
+                    "Missing API Keys! Please set GEMINI_API_KEY or GROQ_API_KEY in Streamlit Secrets."
+                )
             else:
                 gemini_client, groq_client = None, None
                 if gemini_key:
                     try:
-client = genai.Client(api_key=" ")
-for m in client.models.list():
+                        gemini_client = genai.Client(api_key=gemini_key)
+                    except Exception as e:
+                        st.warning(f"Could not initialize Gemini client: {e}")
                 if groq_key:
                     try:
                         groq_client = Groq(api_key=groq_key)
@@ -2204,7 +2375,9 @@ for m in client.models.list():
                             f"(you uploaded {len(student_files)})."
                         )
 
-                    remaining_quota = MAX_PAPERS_PER_SESSION - int(st.session_state.get("graded_count", 0))
+                    remaining_quota = MAX_PAPERS_PER_SESSION - int(
+                        st.session_state.get("graded_count", 0)
+                    )
                     if remaining_quota <= 0:
                         st.error(
                             f"Session quota reached ({MAX_PAPERS_PER_SESSION} papers). "
@@ -2212,7 +2385,9 @@ for m in client.models.list():
                         )
                     else:
                         if len(files_to_grade) > remaining_quota:
-                            st.warning(f"Session quota allows only {remaining_quota} more paper(s); grading those.")
+                            st.warning(
+                                f"Session quota allows only {remaining_quota} more paper(s); grading those."
+                            )
                             files_to_grade = files_to_grade[:remaining_quota]
 
                         st.session_state.graded_batch = []
@@ -2244,7 +2419,9 @@ for m in client.models.list():
                                     # extract_text_with_status already surfaced the specific
                                     # reason (missing key, blank scan, busy model, ...).
                                     pending["busy"] = bool(meta.get("transient"))
-                                    st.warning(f"⚠️ Skipped **{s_file.name}** — see the message above for the reason.")
+                                    st.warning(
+                                        f"⚠️ Skipped **{s_file.name}** — see the message above for the reason."
+                                    )
                                     return None
                                 # Keep the transcript: if grading is what fails, the retry
                                 # must not pay for reading the same scan a second time.
@@ -2274,7 +2451,9 @@ for m in client.models.list():
                             return result
 
                         for i, s_file in enumerate(files_to_grade):
-                            status_text.text(f"Evaluating submission {i+1}/{len(files_to_grade)}: {s_file.name}...")
+                            status_text.text(
+                                f"Evaluating submission {i+1}/{len(files_to_grade)}: {s_file.name}..."
+                            )
 
                             pending = {"file": s_file}
                             result = grade_one(pending)
@@ -2284,7 +2463,9 @@ for m in client.models.list():
                                     busy_papers.append(pending)
                             else:
                                 st.session_state.graded_batch.append(result)
-                                st.session_state.graded_count = int(st.session_state.get("graded_count", 0)) + 1
+                                st.session_state.graded_count = (
+                                    int(st.session_state.get("graded_count", 0)) + 1
+                                )
                                 successful += 1
                             progress_bar.progress((i + 1) / len(files_to_grade))
 
@@ -2299,7 +2480,9 @@ for m in client.models.list():
                                 if result is None:
                                     continue
                                 st.session_state.graded_batch.append(result)
-                                st.session_state.graded_count = int(st.session_state.get("graded_count", 0)) + 1
+                                st.session_state.graded_count = (
+                                    int(st.session_state.get("graded_count", 0)) + 1
+                                )
                                 successful += 1
                                 skipped -= 1
                             still_busy = [p["file"].name for p in busy_papers if p.get("busy")]
@@ -2310,7 +2493,9 @@ for m in client.models.list():
                         summary = f"🎉 Evaluated {successful} paper(s)."
                         if skipped:
                             summary += f" Skipped {skipped} (no text or AI failure)."
-                        st.success(summary + " Proceed to **Analytics & Reports** to inspect grades.")
+                        st.success(
+                            summary + " Proceed to **Analytics & Reports** to inspect grades."
+                        )
 
                         if still_busy:
                             st.warning(
@@ -2319,36 +2504,42 @@ for m in client.models.list():
                                 "batch with only them selected in a few minutes picks them up — "
                                 "the grades already in this batch are unaffected."
                             )
-                
+
 # --- TAB 3: ANALYTICS & REPORTS ---
 with wizard_tab3:
     t3_sub1, t3_sub2 = st.tabs(["📝 Batch Review & Grading", "📂 Student Portfolio Lookup"])
-    
+
     # --- FEATURE: BATCH REVIEW & REWRITE ---
     with t3_sub1:
         batch_data = st.session_state.get("graded_batch", [])
-        
-        if not batch_data or all(p.get("score", 0) == 0 and not p.get("evaluation_data") for p in batch_data):
-            st.info("📌 No evaluation results yet. Upload and process papers in Tab 2 to view analytics here.")
+
+        if not batch_data or all(
+            p.get("score", 0) == 0 and not p.get("evaluation_data") for p in batch_data
+        ):
+            st.info(
+                "📌 No evaluation results yet. Upload and process papers in Tab 2 to view analytics here."
+            )
         else:
             st.markdown("#### 📊 Batch Class Analytics")
-            
+
             # Extract analytics dataset safely from batch
             analytics_list = []
             for paper in batch_data:
-                analytics_list.append({
-                    "Student Name": paper.get("student_name", "Unknown"),
-                    "Final Score": paper.get("score", 0.0)
-                })
-            
+                analytics_list.append(
+                    {
+                        "Student Name": paper.get("student_name", "Unknown"),
+                        "Final Score": paper.get("score", 0.0),
+                    }
+                )
+
             df_analytics = pd.DataFrame(analytics_list)
             fig_bar = px.bar(
-                df_analytics, 
-                x="Student Name", 
-                y="Final Score", 
-                color="Final Score", 
+                df_analytics,
+                x="Student Name",
+                y="Final Score",
+                color="Final Score",
                 title="Class Score Distribution",
-                labels={"Final Score": "Score", "Student Name": "Student"}
+                labels={"Final Score": "Score", "Student Name": "Student"},
             )
             st.plotly_chart(fig_bar, width="stretch")
             st.divider()
@@ -2380,46 +2571,90 @@ with wizard_tab3:
                 student_name = item.get("student_name", f"Student #{idx+1}")
                 current_score = item.get("score", 0.0)
                 eval_data = item.get("evaluation_data") or {}
-                
-                with st.expander(f"📝 Student: {student_name} | Grade: {current_score} / {target_scale}", expanded=(idx == 0)):
-                    
+
+                with st.expander(
+                    f"📝 Student: {student_name} | Grade: {current_score} / {target_scale}",
+                    expanded=(idx == 0),
+                ):
+
                     # Interactive Rubric Sliders for Fine-Tuning
                     st.markdown("##### 🎚️ Fine-Tune Criteria Scores")
                     col_s1, col_s2, col_s3 = st.columns(3)
-                    
+
                     # Extract individual criteria scores (0-3 band scale) with safe defaults
-                    default_ta = float(eval_data.get("score_task_achievement", eval_data.get("task_achievement", 2.0)))
-                    default_org = float(eval_data.get("score_organization", eval_data.get("organization", 2.0)))
-                    default_acc = float(eval_data.get("score_accuracy", eval_data.get("accuracy", 2.0)))
+                    default_ta = float(
+                        eval_data.get(
+                            "score_task_achievement", eval_data.get("task_achievement", 2.0)
+                        )
+                    )
+                    default_org = float(
+                        eval_data.get("score_organization", eval_data.get("organization", 2.0))
+                    )
+                    default_acc = float(
+                        eval_data.get("score_accuracy", eval_data.get("accuracy", 2.0))
+                    )
 
                     with col_s1:
-                        new_ta = st.slider("Task Achievement", 0.0, 3.0, min(max(default_ta, 0.0), 3.0), 0.5, key=f"ta_{idx}_{student_name}")
+                        new_ta = st.slider(
+                            "Task Achievement",
+                            0.0,
+                            3.0,
+                            min(max(default_ta, 0.0), 3.0),
+                            0.5,
+                            key=f"ta_{idx}_{student_name}",
+                        )
                     with col_s2:
-                        new_org = st.slider("Organization", 0.0, 3.0, min(max(default_org, 0.0), 3.0), 0.5, key=f"org_{idx}_{student_name}")
+                        new_org = st.slider(
+                            "Organization",
+                            0.0,
+                            3.0,
+                            min(max(default_org, 0.0), 3.0),
+                            0.5,
+                            key=f"org_{idx}_{student_name}",
+                        )
                     with col_s3:
-                        new_acc = st.slider("Accuracy", 0.0, 3.0, min(max(default_acc, 0.0), 3.0), 0.5, key=f"acc_{idx}_{student_name}")
-                    
+                        new_acc = st.slider(
+                            "Accuracy",
+                            0.0,
+                            3.0,
+                            min(max(default_acc, 0.0), 3.0),
+                            0.5,
+                            key=f"acc_{idx}_{student_name}",
+                        )
+
                     # Calculate scaled score (rubric totals 9 raw points, mapped to the target scale)
                     raw_total = new_ta + new_org + new_acc
                     adjusted_total = round((raw_total / 9.0) * float(target_scale), 1)
-                    
+
                     st.metric("Adjusted Total Grade", f"{adjusted_total} / {target_scale}")
-                    
-                    if st.button("💾 Lock Final Grade & Save to Database", key=f"save_{idx}_{student_name}"):
+
+                    if st.button(
+                        "💾 Lock Final Grade & Save to Database", key=f"save_{idx}_{student_name}"
+                    ):
                         item["score"] = adjusted_total
-                        
+
                         user_name = st.session_state.get("user_name", "Teacher")
                         user_email = st.session_state.get("user_email", "teacher@school.edu")
-                        
+
                         # Database Persistence
                         if "save_grade" in globals():
-                            save_grade(user_name, user_email, student_name, st.session_state.get("preset_template", "Essay"), adjusted_total, len(item.get("text", "").split()), target_scale)
-                        
+                            save_grade(
+                                user_name,
+                                user_email,
+                                student_name,
+                                st.session_state.get("preset_template", "Essay"),
+                                adjusted_total,
+                                len(item.get("text", "").split()),
+                                target_scale,
+                            )
+
                         if "save_teacher_exemplar" in globals():
                             save_teacher_exemplar(
                                 student_name=student_name,
                                 student_text=item.get("text", ""),
-                                rubric_type=st.session_state.get("preset_template", "Standard Essay"),
+                                rubric_type=st.session_state.get(
+                                    "preset_template", "Standard Essay"
+                                ),
                                 ai_score=current_score,
                                 teacher_score=adjusted_total,
                                 teacher_feedback=item.get("feedback", ""),
@@ -2437,7 +2672,10 @@ with wizard_tab3:
                             report_bytes = build_student_report_text(
                                 item, target_scale, user_name
                             ).encode("utf-8")
-                            safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", student_name).strip("._") or "student"
+                            safe_name = (
+                                re.sub(r"[^A-Za-z0-9._-]+", "_", student_name).strip("._")
+                                or "student"
+                            )
                             drive_id = upload_file_to_drive(
                                 report_bytes,
                                 f"{safe_name}_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')}.txt",
@@ -2458,18 +2696,26 @@ with wizard_tab3:
                     # Model Answer Generation Tool
                     st.divider()
                     st.markdown("##### ✨ Teaching Tools")
-                    if st.button("✍️ Generate CEFR B1+ Model Answer from this text", key=f"rewrite_{idx}_{student_name}"):
+                    if st.button(
+                        "✍️ Generate CEFR B1+ Model Answer from this text",
+                        key=f"rewrite_{idx}_{student_name}",
+                    ):
                         with st.spinner("AI is crafting the model answer..."):
-                            groq_key = get_secret("GROQ_API_KEY") if "get_secret" in globals() else None
+                            groq_key = (
+                                get_secret("GROQ_API_KEY") if "get_secret" in globals() else None
+                            )
                             if groq_key:
                                 try:
                                     groq_client = Groq(api_key=groq_key)
                                     completion = groq_client.chat.completions.create(
                                         model=GROQ_MODEL,
                                         messages=[
-                                            {"role": "system", "content": "You are a master English teacher. Rewrite the student's text into a exemplary CEFR B1+ essay. Fix grammar, elevate vocabulary, and preserve their core message."},
-                                            {"role": "user", "content": item.get("text", "")}
-                                        ]
+                                            {
+                                                "role": "system",
+                                                "content": "You are a master English teacher. Rewrite the student's text into a exemplary CEFR B1+ essay. Fix grammar, elevate vocabulary, and preserve their core message.",
+                                            },
+                                            {"role": "user", "content": item.get("text", "")},
+                                        ],
                                     )
                                     model_answer = completion.choices[0].message.content
                                     st.success("**Perfected B1+ Model Answer:**")
@@ -2478,14 +2724,16 @@ with wizard_tab3:
                                     st.error(f"Failed to generate model answer: {e}")
                             else:
                                 st.error("Groq API key missing in environment secrets.")
-                    
+
                     st.divider()
                     st.markdown("##### 📄 Original Text & Feedback")
                     # Handwriting/scan transcripts can misread words, so let the
                     # teacher check what the AI actually graded before locking a grade.
                     submitted_text = item.get("text", "")
                     if submitted_text:
-                        with st.expander("🔍 Text the AI graded — fix any misread words to teach the system"):
+                        with st.expander(
+                            "🔍 Text the AI graded — fix any misread words to teach the system"
+                        ):
                             st.caption(
                                 "Correct only what the AI misread (names, unclear words). "
                                 "Each fix is remembered for this class and applied to future papers."
@@ -2542,18 +2790,26 @@ with wizard_tab3:
                                     )
 
                     if item.get("calibrated"):
-                        st.caption("🎯 Graded using your previous marking decisions as calibration.")
+                        st.caption(
+                            "🎯 Graded using your previous marking decisions as calibration."
+                        )
                     if item.get("corrections"):
                         st.warning(item["corrections"])
-                    st.markdown(f"**Detailed Feedback:**\n\n{item.get('feedback', 'No detailed feedback generated.')}")
+                    st.markdown(
+                        f"**Detailed Feedback:**\n\n{item.get('feedback', 'No detailed feedback generated.')}"
+                    )
 
     # --- FEATURE: STUDENT PORTFOLIO LOOKUP BY NAME ---
     with t3_sub2:
         st.markdown("### 🔍 Student Progress Portfolio")
-        st.write("Search historical records by student first name or surname for parent-teacher meetings.")
-        
-        search_query = st.text_input("Enter Student First Name or Surname:", placeholder="e.g., Ali Yılmaz or Yılmaz")
-        
+        st.write(
+            "Search historical records by student first name or surname for parent-teacher meetings."
+        )
+
+        search_query = st.text_input(
+            "Enter Student First Name or Surname:", placeholder="e.g., Ali Yılmaz or Yılmaz"
+        )
+
         if st.button("Search Portfolio", type="primary", key="search_portfolio_btn"):
             if not search_query.strip():
                 st.warning("Please enter a name to search.")
@@ -2569,32 +2825,49 @@ with wizard_tab3:
                     )
                     if not IS_ADMIN:
                         query = query.eq("teacher_email", USER_EMAIL)
-                    res = query.ilike("student_name", f"%{search_query.strip()}%") \
-                        .order("created_at", desc=True).execute()
-                    
+                    res = (
+                        query.ilike("student_name", f"%{search_query.strip()}%")
+                        .order("created_at", desc=True)
+                        .execute()
+                    )
+
                     if res.data:
                         df_port = pd.DataFrame(res.data)
-                        df_port["created_at"] = pd.to_datetime(df_port["created_at"]).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y")
-                        
-                        st.success(f"✅ Found {len(df_port)} evaluation record(s) matching '**{search_query}**'")
-                        
+                        df_port["created_at"] = (
+                            pd.to_datetime(df_port["created_at"])
+                            .dt.tz_convert("Europe/Istanbul")
+                            .dt.strftime("%d %b %Y")
+                        )
+
+                        st.success(
+                            f"✅ Found {len(df_port)} evaluation record(s) matching '**{search_query}**'"
+                        )
+
                         # Progress Line Chart
                         fig_line = px.line(
-                            df_port[::-1], 
-                            x="created_at", 
-                            y="score", 
-                            color="student_name", 
-                            markers=True, 
-                            title="Student Grade Progression Over Time", 
-                            labels={"created_at": "Date", "score": "Grade"}
+                            df_port[::-1],
+                            x="created_at",
+                            y="score",
+                            color="student_name",
+                            markers=True,
+                            title="Student Grade Progression Over Time",
+                            labels={"created_at": "Date", "score": "Grade"},
                         )
                         st.plotly_chart(fig_line, width="stretch")
-                        
+
                         # History Dataframe Table
                         st.dataframe(
-                            df_port[["created_at", "student_name", "rubric_type", "score", "teacher_feedback"]], 
-                            width="stretch", 
-                            hide_index=True
+                            df_port[
+                                [
+                                    "created_at",
+                                    "student_name",
+                                    "rubric_type",
+                                    "score",
+                                    "teacher_feedback",
+                                ]
+                            ],
+                            width="stretch",
+                            hide_index=True,
                         )
                     else:
                         st.warning(f"No records found matching: '**{search_query}**'")
@@ -2619,7 +2892,13 @@ if IS_ADMIN and admin_tab:
         logs_data = []
         if supabase:
             try:
-                logs_res = supabase.table("user_logs").select("*").order("created_at", desc=True).limit(20).execute()
+                logs_res = (
+                    supabase.table("user_logs")
+                    .select("*")
+                    .order("created_at", desc=True)
+                    .limit(20)
+                    .execute()
+                )
                 logs_data = logs_res.data or []
             except Exception as e:
                 st.error(f"Error fetching user logs: {e}")
@@ -2642,7 +2921,9 @@ if IS_ADMIN and admin_tab:
                 st.session_state.last_seen_log_id = latest_log.get("id")
 
         # 4. DEFINE SUB-TABS
-        admin_sub1, admin_sub2, admin_sub3 = st.tabs(["📊 Insights", "📝 Exemplars & Audit", "⚙️ System & Logs"])
+        admin_sub1, admin_sub2, admin_sub3 = st.tabs(
+            ["📊 Insights", "📝 Exemplars & Audit", "⚙️ System & Logs"]
+        )
 
         # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
         with admin_sub1:
@@ -2651,8 +2932,12 @@ if IS_ADMIN and admin_tab:
                 df_insights = pd.DataFrame(essay_data)
 
                 if "ai_score" in df_insights.columns and "score" in df_insights.columns:
-                    df_insights["ai_score"] = pd.to_numeric(df_insights["ai_score"], errors="coerce").fillna(0)
-                    df_insights["score"] = pd.to_numeric(df_insights["score"], errors="coerce").fillna(0)
+                    df_insights["ai_score"] = pd.to_numeric(
+                        df_insights["ai_score"], errors="coerce"
+                    ).fillna(0)
+                    df_insights["score"] = pd.to_numeric(
+                        df_insights["score"], errors="coerce"
+                    ).fillna(0)
                     df_insights["Variance"] = df_insights["score"] - df_insights["ai_score"]
 
                     high_variance = df_insights[df_insights["Variance"].abs() >= 10]
@@ -2660,25 +2945,51 @@ if IS_ADMIN and admin_tab:
                     col_i1, col_i2 = st.columns(2)
                     with col_i1:
                         avg_diff = round(df_insights["Variance"].mean(), 2)
-                        st.metric("Avg Teacher Adjustment", f"{avg_diff:+g} pts", help="Positive means teachers grade higher than AI")
+                        st.metric(
+                            "Avg Teacher Adjustment",
+                            f"{avg_diff:+g} pts",
+                            help="Positive means teachers grade higher than AI",
+                        )
                     with col_i2:
-                        st.metric("High Override Rate (≥10 pts)", f"{len(high_variance)} / {len(df_insights)}")
+                        st.metric(
+                            "High Override Rate (≥10 pts)",
+                            f"{len(high_variance)} / {len(df_insights)}",
+                        )
 
                     if not high_variance.empty:
                         st.warning("⚠️ **Significant Score Overrides (±10+ Points):**")
                         st.dataframe(
-                            high_variance[["teacher_email", "rubric_type", "ai_score", "score", "Variance", "teacher_feedback"]],
-                            width="stretch", hide_index=True
+                            high_variance[
+                                [
+                                    "teacher_email",
+                                    "rubric_type",
+                                    "ai_score",
+                                    "score",
+                                    "Variance",
+                                    "teacher_feedback",
+                                ]
+                            ],
+                            width="stretch",
+                            hide_index=True,
                         )
                     else:
-                        st.success("✅ AI scoring alignment is strong. No major score overrides detected.")
+                        st.success(
+                            "✅ AI scoring alignment is strong. No major score overrides detected."
+                        )
 
                 st.divider()
                 st.markdown("#### 🔍 Common Error & Red-Pen Trends")
                 if "red_pen_corrections" in df_insights.columns:
-                    all_corrections = " ".join(df_insights["red_pen_corrections"].dropna().astype(str).tolist())
+                    all_corrections = " ".join(
+                        df_insights["red_pen_corrections"].dropna().astype(str).tolist()
+                    )
                     if all_corrections.strip():
-                        st.text_area("Recent Red-Pen Corrections Summary", value=all_corrections[:1500], height=120, disabled=True)
+                        st.text_area(
+                            "Recent Red-Pen Corrections Summary",
+                            value=all_corrections[:1500],
+                            height=120,
+                            disabled=True,
+                        )
                     else:
                         st.info("No red-pen correction logs available yet.")
             else:
@@ -2691,9 +3002,25 @@ if IS_ADMIN and admin_tab:
                 df_audit = pd.DataFrame(essay_data)
 
                 if "created_at" in df_audit.columns:
-                    df_audit["created_at"] = pd.to_datetime(df_audit["created_at"], utc=True).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M")
+                    df_audit["created_at"] = (
+                        pd.to_datetime(df_audit["created_at"], utc=True)
+                        .dt.tz_convert("Europe/Istanbul")
+                        .dt.strftime("%d %b %Y, %H:%M")
+                    )
 
-                display_cols = [c for c in ["created_at", "teacher_email", "rubric_type", "ai_score", "score", "teacher_feedback", "student_text"] if c in df_audit.columns]
+                display_cols = [
+                    c
+                    for c in [
+                        "created_at",
+                        "teacher_email",
+                        "rubric_type",
+                        "ai_score",
+                        "score",
+                        "teacher_feedback",
+                        "student_text",
+                    ]
+                    if c in df_audit.columns
+                ]
                 st.dataframe(df_audit[display_cols], width="stretch", hide_index=True)
 
                 st.divider()
@@ -2706,7 +3033,7 @@ if IS_ADMIN and admin_tab:
                     file_name=f"ISTEK_Grading_Memory_Audit_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                     type="primary",
-                    width="stretch"
+                    width="stretch",
                 )
             else:
                 st.info("No audit records stored in database.")
@@ -2717,9 +3044,17 @@ if IS_ADMIN and admin_tab:
             if logs_data:
                 df_logs = pd.DataFrame(logs_data)
                 if "created_at" in df_logs.columns:
-                    df_logs["created_at"] = pd.to_datetime(df_logs["created_at"], utc=True).dt.tz_convert("Europe/Istanbul").dt.strftime("%d %b %Y, %H:%M:%S")
+                    df_logs["created_at"] = (
+                        pd.to_datetime(df_logs["created_at"], utc=True)
+                        .dt.tz_convert("Europe/Istanbul")
+                        .dt.strftime("%d %b %Y, %H:%M:%S")
+                    )
 
-                cols = [c for c in ["created_at", "user_email", "action", "details"] if c in df_logs.columns]
+                cols = [
+                    c
+                    for c in ["created_at", "user_email", "action", "details"]
+                    if c in df_logs.columns
+                ]
                 st.dataframe(df_logs[cols], width="stretch", hide_index=True)
             else:
                 st.info("No active user logins recorded yet.")
@@ -2757,11 +3092,14 @@ if IS_ADMIN and admin_tab:
                 st.write(f"• Groq Llama Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
 
 # --- FOOTER ---
-st.markdown("""
+st.markdown(
+    """
     <hr>
     <div style='text-align: center; color: gray; font-size: 0.85rem;'>
         <p><b>Mark My Words - Automated English Grader</b></p>
         <p>&copy; 2026 Serant Şenyaylar. All rights reserved. Created for İSTEK Schools.</p>
     </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 # Trigger CodeQL
