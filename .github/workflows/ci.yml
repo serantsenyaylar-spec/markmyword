@@ -1,61 +1,51 @@
-# Catches the failure mode CodeQL structurally cannot see.
-#
-# CodeQL is a vulnerability scanner: with `build-mode: none` it never installs
-# or imports anything, so a missing dependency is invisible to it. The app
-# shipped to main with `import googleapiclient` at line 21 and no
-# google-api-python-client in requirements.txt — every deploy died with
-# ModuleNotFoundError, and both CI and CodeQL stayed green.
-#
-# This job installs exactly what requirements.txt declares, then proves the app
-# actually starts and renders. Verified against this repo:
-#   broken env -> `python -c "import app"` exits 1 (ModuleNotFoundError)
-#   fixed env  -> exits 0, AppTest renders 9 tabs with 0 exceptions
 name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 
-# Without this, rapid pushes to main stack up runs and burn minutes.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  boot:
-    name: App boots with the pinned dependencies
+  test:
+    name: Azure OCR safety checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
-      # Lets the auth gate resolve a synthetic local identity instead of
-      # calling st.stop(). No real credentials are needed or used.
-      APP_ENV: local
+      # Test-only authentication bypass. No production credential is used.
+      APP_ENV: test
       ALLOW_DEV_BYPASS: "true"
       DEV_AUTH_BYPASS: "true"
       ALLOWED_DOMAIN: istek.k12.tr
-    steps:
-      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
 
-      - name: Install exactly what requirements.txt declares
+      - name: Install pinned dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
-      # The check that would have caught the outage. No stub, no mock: it
-      # imports the real module, so any missing or renamed dependency fails here.
-         - name: Every import app.py makes must resolve
-     run: |
-       python -c "import app; print('OK: all imports resolve')"
+      - name: Verify application imports
+        run: python -c "import app"
 
-      # Executes the whole script the way a browser session would and surfaces
-      # anything raised while the UI renders.
-      - name: Boot the app and render every tab
+      - name: Render every Streamlit tab
         run: |
           python - <<'PY'
           from streamlit.testing.v1 import AppTest
@@ -63,22 +53,23 @@ jobs:
           at = AppTest.from_file("app.py", default_timeout=180)
           at.run()
           if at.exception:
-              for e in at.exception:
-                  print("EXCEPTION:", e.value)
-              raise SystemExit(f"{len(at.exception)} uncaught exception(s) while rendering")
-          print(f"OK: app rendered {len(at.tabs)} tabs with no exceptions")
+              for error in at.exception:
+                  print(error.value)
+              raise SystemExit("Streamlit rendering raised an exception")
+          if len(at.tabs) != 9:
+              raise SystemExit(f"Expected 9 tabs, found {len(at.tabs)}")
+          print("Streamlit app rendered cleanly")
           PY
 
-      # Enforces the "0 known vulnerabilities" claim in requirements.txt.
-      - name: Dependency vulnerability audit
+      - name: Run offline Azure OCR tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Audit dependencies
         run: |
-          pip install pip-audit
+          python -m pip install pip-audit
           pip-audit -r requirements.txt
 
-      # Pyflakes + syntax errors only. The full default rule set also flags
-      # 33 deliberate `except Exception` blocks (BLE001) that are intentional
-      # here, so it is left out of CI on purpose.
       - name: Lint
         run: |
-          pip install ruff
+          python -m pip install ruff
           ruff check --select F,E9 .
