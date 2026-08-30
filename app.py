@@ -2999,7 +2999,7 @@ if IS_ADMIN and admin_tab:
                 groq_check = get_secret("GROQ_API_KEY")
 
                 st.write(f"• Gemini Engine: {'🟢 Online' if gemini_check else '🔴 Key Missing'}")
-                st.write(f"• Groq Llama Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
+                st.write(f"• Groq Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
 
 # --- FOOTER ---
 st.markdown(
