@@ -42,10 +42,8 @@ dist/
 Thumbs.db
 *.log
 
-# --- Controlled OCR benchmark material --------------------------------------
-# Benchmark scans, reference transcripts, and comparison exports can still be
-# sensitive educational data even after de-identification. Keep them local or
-# in the school-approved storage location, never in this source repository.
-/benchmarks/
-/benchmark-results/
-/ocr-benchmark-results/
+# --- Azure OCR review material ----------------------------------------------
+# Scans, transcripts, and review exports can contain sensitive educational data.
+# Keep them in the approved storage location, never in this source repository.
+/azure-ocr-samples/
+/azure-ocr-results/

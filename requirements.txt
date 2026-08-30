@@ -8,9 +8,9 @@
 # "ModuleNotFoundError: No module named 'googleapiclient'" before any UI loads.
 # The old comment claiming it was unused was wrong and is removed.
 #
-# pytesseract was removed: never imported anywhere. Handwriting and scanned PDFs
-# are transcribed by Gemini's native document vision, which accepts PDFs and
-# images directly and needs no system packages. Delete packages.txt too.
+# pytesseract was removed: never imported anywhere. Handwriting and scanned
+# PDFs/images use Azure Document Intelligence Read through requests; no Azure
+# SDK or system OCR package is required. pypdf handles native PDF text first.
 streamlit==1.62.0
 pandas==3.0.5
 google-genai==2.20.0

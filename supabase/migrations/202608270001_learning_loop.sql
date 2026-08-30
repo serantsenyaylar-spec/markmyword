@@ -1,15 +1,12 @@
 -- Mark My Words — learning loop
 -- Migration: 202608270001_learning_loop.sql
 --
--- Adds the storage the app needs to IMPROVE with use, in two independent ways:
+-- Adds grading-calibration storage and retains one legacy table for historical
+-- compatibility:
 --
---   1. transcript_corrections — when a teacher fixes a misread word in an AI
---      transcript, the (wrong -> right) pair is stored. Recurring corrections
---      for a class become a glossary that is fed into later transcription
---      prompts, so student names and class-specific vocabulary stop being
---      misread. This is retrieval-based adaptation, NOT model training: no
---      weights change, results improve immediately, and nothing is shared
---      between teachers.
+--   1. transcript_corrections is retained only for previously stored records.
+--      The Azure Read integration does not read or write this table, build a
+--      glossary from it, or claim that teacher edits change Azure OCR.
 --
 --   2. essay_memory.embedding (already written by the app but, until now,
 --      never read back) becomes the source of grading calibration examples.
@@ -24,12 +21,11 @@
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
--- transcript_corrections: teacher-verified handwriting fixes.
+-- transcript_corrections: legacy teacher-correction records.
 --
--- One row per (wrong phrase -> corrected phrase) observed in a real paper.
--- `class_tag` scopes a glossary to a class (e.g. "10A"), because a name like
--- "Şevval" recurs within one class and is the exact kind of token that
--- generic OCR gets wrong every single time.
+-- The table remains to avoid destroying historical records in an existing
+-- database. Current application code does not query or write it, and no Azure
+-- OCR request incorporates entries from this table.
 -- ---------------------------------------------------------------------------
 create table if not exists public.transcript_corrections (
     id             uuid primary key default gen_random_uuid(),
@@ -38,8 +34,7 @@ create table if not exists public.transcript_corrections (
     source_file    text,
     wrong_text     text not null,
     right_text     text not null,
-    -- How many times this same fix has been confirmed. High-count entries are
-    -- the most valuable glossary hints.
+    -- Retained historical usage count; it is not used as an Azure OCR input.
     hit_count      integer not null default 1,
     created_at     timestamptz not null default now()
 );
@@ -51,7 +46,7 @@ create index if not exists transcript_corrections_class_idx
 create index if not exists transcript_corrections_hits_idx
     on public.transcript_corrections (hit_count desc);
 
--- The same misreading should accumulate on one row rather than duplicate.
+-- Legacy uniqueness rule retained with the historical records.
 create unique index if not exists transcript_corrections_unique
     on public.transcript_corrections (teacher_email, coalesce(class_tag, ''), wrong_text, right_text);
 

@@ -26,7 +26,8 @@
 -- Least privilege: only the operations the app performs.
 --   user_logs              : insert (login/session audit), select (admin feed)
 --   essay_memory           : insert (lock a grade), select (portfolio lookup)
---   transcript_corrections : insert + update (hit_count), select (glossary)
+--   transcript_corrections : legacy historical table; later migration retires
+--                            new authenticated writes without deleting rows
 -- No DELETE and no UPDATE anywhere else: nothing in app.py issues them.
 
 grant usage on schema public to authenticated;
