@@ -1262,6 +1262,11 @@ default_states = {
     # Learning loop
     "active_class_tag": "",
     "use_calibration": True,
+    # Grade locks already written in this browser session. Supabase is the
+    # canonical record; once it accepts a lock, Sheets/Drive copies are written
+    # only as secondary exports, and the same student cannot be locked twice
+    # in one session.
+    "locked_grades": set(),
 }
 
 for key, val in default_states.items():
@@ -2550,83 +2555,115 @@ with wizard_tab3:
                     if review_required and not transcript_reviewed:
                         st.warning("Review and apply the Azure OCR transcript above before locking this grade.")
 
+                    # Database-first grade lock. Supabase is the canonical record,
+                    # so it is written first and is the only step whose success
+                    # controls the lock. Sheets/Drive are secondary exports and are
+                    # skipped entirely when the canonical save fails. A lock that
+                    # already succeeded in this session is blocked from repeating.
+                    lock_key = str(student_name).strip().casefold()
+                    locked_grades = st.session_state.get("locked_grades") or set()
+                    already_locked = lock_key in locked_grades
+
                     if st.button(
                         "💾 Lock Final Grade & Save to Database",
                         key=f"save_{idx}_{student_name}",
-                        disabled=review_required and not transcript_reviewed,
+                        disabled=(review_required and not transcript_reviewed) or already_locked,
                     ):
-                        item["score"] = adjusted_total
-
-                        user_name = st.session_state.get("user_name", "Teacher")
-                        user_email = st.session_state.get("user_email", "teacher@school.edu")
-
-                        # Database Persistence
-                        if "save_grade" in globals():
-                            save_grade(
-                                user_name,
-                                user_email,
-                                student_name,
-                                st.session_state.get("preset_template", "Essay"),
-                                adjusted_total,
-                                len(item.get("text", "").split()),
-                                target_scale,
-                            )
-
-                        exemplar_saved = None
-                        if "save_teacher_exemplar" in globals():
-                            exemplar_saved = save_teacher_exemplar(
-                                student_name=student_name,
-                                student_text=item.get("text", ""),
-                                rubric_type=st.session_state.get(
-                                    "preset_template", "Standard Essay"
-                                ),
-                                ai_score=current_score,
-                                teacher_score=adjusted_total,
-                                teacher_feedback=item.get("feedback", ""),
-                                red_pen_corrections=item.get("corrections", ""),
-                                teacher_email=user_email,
-                                class_tag=st.session_state.get("active_class_tag", ""),
-                                was_handwritten=bool(item.get("was_handwritten")),
-                                ocr_source=item.get("ocr_source", ""),
-                                ocr_metadata=item.get("ocr_metadata", {}),
-                                transcript_reviewed=bool(item.get("transcript_reviewed")),
-                            )
-
-                        # Brief §7b: file the report in the institution's Drive folder.
-                        # upload_file_to_drive() returns None when the service account or
-                        # DRIVE_FOLDER_ID is absent, so this is a no-op if you never
-                        # configure Drive — safe to leave wired up either way.
-                        if DRIVE_FOLDER_ID:
-                            report_bytes = build_student_report_text(
-                                item, target_scale, user_name
-                            ).encode("utf-8")
-                            safe_name = (
-                                re.sub(r"[^A-Za-z0-9._-]+", "_", student_name).strip("._")
-                                or "student"
-                            )
-                            drive_id = upload_file_to_drive(
-                                report_bytes,
-                                f"{safe_name}_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')}.txt",
-                                DRIVE_FOLDER_ID,
-                                "text/plain",
-                            )
-                            if drive_id:
-                                st.caption("📁 Report filed to Google Drive.")
-                            else:
-                                st.caption(
-                                    "📁 Drive upload skipped — check **DRIVE_FOLDER_ID** and the "
-                                    "service-account secret."
-                                )
-
-                        if exemplar_saved is False:
-                            st.error(
-                                f"⚠️ Grade for {student_name} is locked in this session, but the database "
-                                "exemplar did not save. Confirm the Supabase migration and connection before "
-                                "closing this page."
+                        if already_locked:
+                            st.info(
+                                f"Grade for {student_name} is already locked in this session; "
+                                "no duplicate save was performed."
                             )
                         else:
-                            st.success(f"✅ Grade for {student_name} locked and saved!")
-                            st.rerun()
+                            item["score"] = adjusted_total
+
+                            user_name = st.session_state.get("user_name", "Teacher")
+                            user_email = st.session_state.get("user_email", "teacher@school.edu")
+
+                            # 1) Canonical save first — Supabase essay_memory.
+                            exemplar_saved = (
+                                save_teacher_exemplar(
+                                    student_name=student_name,
+                                    student_text=item.get("text", ""),
+                                    rubric_type=st.session_state.get(
+                                        "preset_template", "Standard Essay"
+                                    ),
+                                    ai_score=current_score,
+                                    teacher_score=adjusted_total,
+                                    teacher_feedback=item.get("feedback", ""),
+                                    red_pen_corrections=item.get("corrections", ""),
+                                    teacher_email=user_email,
+                                    class_tag=st.session_state.get("active_class_tag", ""),
+                                    was_handwritten=bool(item.get("was_handwritten")),
+                                    ocr_source=item.get("ocr_source", ""),
+                                    ocr_metadata=item.get("ocr_metadata", {}),
+                                    transcript_reviewed=bool(item.get("transcript_reviewed")),
+                                )
+                                if "save_teacher_exemplar" in globals()
+                                else None
+                            )
+
+                            if exemplar_saved is False:
+                                # Canonical save failed: do not fabricate a grade in
+                                # Sheets or Drive, and do not mark the session locked.
+                                st.error(
+                                    f"⚠️ Grade for {student_name} was NOT saved. The Supabase database "
+                                    "save failed, so no Google Sheets or Drive copy was written. "
+                                    "Confirm the Supabase migration and connection, then try locking "
+                                    "the grade again."
+                                )
+                            else:
+                                # Canonical save succeeded — record the lock once.
+                                locked_grades.add(lock_key)
+                                st.session_state["locked_grades"] = locked_grades
+                                item["locked"] = True
+
+                                # 2) Secondary Google Sheets export (best-effort; a
+                                # failure here never un-locks or duplicates the record).
+                                if "save_grade" in globals():
+                                    try:
+                                        save_grade(
+                                            user_name,
+                                            user_email,
+                                            student_name,
+                                            st.session_state.get("preset_template", "Essay"),
+                                            adjusted_total,
+                                            len(item.get("text", "").split()),
+                                            target_scale,
+                                        )
+                                    except Exception as exc:
+                                        logger.warning(
+                                            "Sheets export skipped after canonical save: %s", exc
+                                        )
+
+                                # 3) Secondary Drive report (best-effort).
+                                # upload_file_to_drive() returns None when the service
+                                # account or DRIVE_FOLDER_ID is absent, so this is a
+                                # no-op if you never configure Drive.
+                                if DRIVE_FOLDER_ID:
+                                    report_bytes = build_student_report_text(
+                                        item, target_scale, user_name
+                                    ).encode("utf-8")
+                                    safe_name = (
+                                        re.sub(r"[^A-Za-z0-9._-]+", "_", student_name).strip("._")
+                                        or "student"
+                                    )
+                                    drive_id = upload_file_to_drive(
+                                        report_bytes,
+                                        f"{safe_name}_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')}.txt",
+                                        DRIVE_FOLDER_ID,
+                                        "text/plain",
+                                    )
+                                    if drive_id:
+                                        st.caption("📁 Report filed to Google Drive.")
+                                    else:
+                                        st.caption(
+                                            "📁 Drive upload skipped — check **DRIVE_FOLDER_ID** and the "
+                                            "service-account secret."
+                                        )
+
+                                st.success(f"✅ Grade for {student_name} locked and saved!")
+                                st.rerun()
 
                     # Model Answer Generation Tool
                     st.divider()
