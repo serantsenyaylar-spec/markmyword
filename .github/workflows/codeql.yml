@@ -1,83 +1,54 @@
-# Catches the failure mode CodeQL structurally cannot see.
+# CodeQL security analysis for Mark My Words (Python).
 #
-# CodeQL is a vulnerability scanner: with `build-mode: none` it never installs
-# or imports anything, so a missing dependency is invisible to it. The app
-# shipped to main with `import googleapiclient` at line 21 and no
-# google-api-python-client in requirements.txt — every deploy died with
-# ModuleNotFoundError, and both CI and CodeQL stayed green.
+# CodeQL is a static vulnerability scanner. With `build-mode: none` it does not
+# install dependencies or import the app, so it can catch structural issues
+# (injections, unsafe deserialization, etc.) even when a dependency is missing.
+# The separate `ci.yml` workflow is what proves the app actually boots with the
+# pinned requirements; this workflow is purely for security analysis.
 #
-# This job installs exactly what requirements.txt declares, then proves the app
-# actually starts and renders. Verified against this repo:
-#   broken env -> `python -c "import app"` exits 1 (ModuleNotFoundError)
-#   fixed env  -> exits 0, AppTest renders 9 tabs with 0 exceptions
-name: CI
+# Python is interpreted, so no build step is required.
+name: CodeQL
 
 on:
   push:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  schedule:
+    - cron: "30 1 * * 1"
 
-# Without this, rapid pushes to main stack up runs and burn minutes.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  boot:
-    name: App boots with the pinned dependencies
+  analyze:
+    name: Analyze (Python)
     runs-on: ubuntu-latest
-    env:
-      # Lets the auth gate resolve a synthetic local identity instead of
-      # calling st.stop(). No real credentials are needed or used.
-      APP_ENV: local
-      ALLOW_DEV_BYPASS: "true"
-      DEV_AUTH_BYPASS: "true"
-      ALLOWED_DOMAIN: istek.k12.tr
+    timeout-minutes: 30
+    permissions:
+      # Required for uploading SARIF results to the security tab.
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
         with:
-          python-version: "3.13"
-          cache: pip
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
 
-      - name: Install exactly what requirements.txt declares
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      # The check that would have caught the outage. No stub, no mock: it
-      # imports the real module, so any missing or renamed dependency fails here.
-      - name: Every import app.py makes must resolve
-        run: python -c "import app; print('OK: all imports resolve')"
-
-      # Executes the whole script the way a browser session would and surfaces
-      # anything raised while the UI renders.
-      - name: Boot the app and render every tab
-        run: |
-          python - <<'PY'
-          from streamlit.testing.v1 import AppTest
-
-          at = AppTest.from_file("app.py", default_timeout=180)
-          at.run()
-          if at.exception:
-              for e in at.exception:
-                  print("EXCEPTION:", e.value)
-              raise SystemExit(f"{len(at.exception)} uncaught exception(s) while rendering")
-          print(f"OK: app rendered {len(at.tabs)} tabs with no exceptions")
-          PY
-
-      # Enforces the "0 known vulnerabilities" claim in requirements.txt.
-      - name: Dependency vulnerability audit
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements.txt
-
-      # Pyflakes + syntax errors only. The full default rule set also flags
-      # 33 deliberate `except Exception` blocks (BLE001) that are intentional
-      # here, so it is left out of CI on purpose.
-      - name: Lint
-        run: |
-          pip install ruff
-          ruff check --select F,E9 .
+      # No build step is required for a pure-Python Streamlit app.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
