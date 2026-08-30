@@ -77,13 +77,21 @@ is not a score or correctness guarantee.
 
 ## Database migration before deployment
 
-Run `supabase/migrations/202608300001_azure_ocr_provenance.sql` once in the
-project's Supabase SQL Editor before deploying this version. It adds three
-non-content fields to `essay_memory` so a locked exemplar can retain the OCR
-route, safe review metadata, and transcript-review state. It also retires new
-writes to the unused legacy correction table without deleting historical rows.
-It does not insert a credential, raw Azure response, operation URL, or document
-image.
+Run both migrations once in the project's Supabase SQL Editor before deploying
+this version:
+
+- `supabase/migrations/202608300001_azure_ocr_provenance.sql` — adds three
+  non-content fields to `essay_memory` (`ocr_source`, `ocr_metadata`,
+  `transcript_reviewed`) so a locked exemplar can retain the OCR route, safe
+  review metadata, and transcript-review state. It also retires new writes to
+  the unused legacy correction table without deleting historical rows.
+- `supabase/migrations/202608300002_ensure_essay_memory_embedding.sql` —
+  guarantees the calibration `embedding` column exists, documents its contract,
+  and adds a GIN index. Idempotent, so it is safe on an already-migrated
+  project.
+
+Neither migration inserts a credential, raw Azure response, operation URL, or
+document image.
 
 ## Privacy and operations
 

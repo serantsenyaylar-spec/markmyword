@@ -18,12 +18,15 @@ file or exposing an endpoint/key.
 3. Open the file
    `supabase/migrations/202608300001_azure_ocr_provenance.sql` from this
    release bundle, copy its full contents into the query, and click **Run**.
-4. Confirm that it completes successfully before deploying the app.
+4. Repeat for
+   `supabase/migrations/202608300002_ensure_essay_memory_embedding.sql`.
+5. Confirm that both complete successfully before deploying the app.
 
-It adds `ocr_source`, `ocr_metadata`, and `transcript_reviewed` to
+Migration 001 adds `ocr_source`, `ocr_metadata`, and `transcript_reviewed` to
 `essay_memory`, and retires new authenticated writes to the unused legacy
-correction table without deleting historical rows. It does not send data to
-Azure and does not contain a secret.
+correction table without deleting historical rows. Migration 002 guarantees the
+calibration `embedding` column and index. Neither sends data to Azure and
+neither contains a secret.
 
 ## Step 2 — Verify Streamlit Community Cloud Secrets
 
@@ -112,6 +115,10 @@ that exact use is within the school's approval.
   teacher review before grade locking.
 - Stores only safe OCR provenance with the locked exemplar; no raw Azure
   response, operation URL, endpoint, or key is persisted.
+- Locks grades database-first: Supabase is the canonical save and is written
+  before any Google Sheets/Drive export. When the database save fails, no
+  Sheets or Drive copy is written, and a grade already locked in the active
+  browser session cannot be locked a second time.
 
 All automated checks in this release use fake HTTP responses. No live Azure
 request, secret value, or student document was used while preparing it.
