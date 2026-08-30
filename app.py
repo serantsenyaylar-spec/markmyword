@@ -29,6 +29,16 @@ from groq import Groq
 from pydantic import BaseModel
 from pypdf import PdfReader
 
+from ocr_providers import (
+    AZURE_DOCUMENT_INTELLIGENCE,
+    GOOGLE_DOCUMENT_AI,
+    OCRProviderError,
+    compare_transcript,
+    fingerprint_bytes,
+    missing_configuration,
+    provider_label,
+    run_ocr,
+)
 from supabase import Client, create_client
 
 # --- PAGE SETUP (MUST BE THE FIRST STREAMLIT COMMAND EXECUTED) ---
@@ -293,6 +303,17 @@ def _retry_hint_seconds(exc: Exception) -> float:
 
     Capped so a bogus or absurd header cannot park a whole class's batch.
     """
+    # The controlled OCR adapters expose an already-parsed Retry-After value;
+    # use it without depending on provider-specific error prose.
+    structured_hint = getattr(exc, "retry_after_seconds", None)
+    try:
+        if structured_hint is not None:
+            parsed_hint = float(structured_hint)
+            if parsed_hint == parsed_hint and 0 <= parsed_hint < float("inf"):
+                return min(parsed_hint, RETRY_MAX_SLEEP_SECONDS * 3)
+    except (TypeError, ValueError):
+        pass
+
     match = _RETRY_HINT_RE.search(f"{getattr(exc, 'details', '')} {exc}")
     if not match:
         return 0.0
@@ -1931,6 +1952,267 @@ def grade_single_paper(gemini_client, groq_client, student_text, prompt_text, ru
     return item, False
 
 
+# --- DE-IDENTIFIED OCR BENCHMARK (ADMIN-ONLY) ------------------------------
+# Google Document AI and Azure Document Intelligence are deliberately isolated
+# from the normal student-upload route while the school compares them on
+# teacher-transcribed, de-identified samples.  Do not route an ordinary batch
+# through either provider until privacy/legal/procurement approval exists.
+OCR_BENCHMARK_PROVIDERS = (GOOGLE_DOCUMENT_AI, AZURE_DOCUMENT_INTELLIGENCE)
+OCR_BENCHMARK_CONFIG_KEYS = (
+    "GOOGLE_DOCUMENT_AI_PROJECT_ID",
+    "GOOGLE_DOCUMENT_AI_LOCATION",
+    "GOOGLE_DOCUMENT_AI_PROCESSOR_ID",
+    "GOOGLE_DOCUMENT_AI_PROCESSOR_VERSION",
+    "GOOGLE_DOCUMENT_AI_SERVICE_ACCOUNT_JSON",
+    "GOOGLE_DOCUMENT_AI_LANGUAGE_HINTS",
+    "GOOGLE_DOCUMENT_AI_ENABLE_IMAGE_QUALITY_SCORES",
+    "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT",
+    "AZURE_DOCUMENT_INTELLIGENCE_KEY",
+    "AZURE_DOCUMENT_INTELLIGENCE_API_VERSION",
+    "AZURE_DOCUMENT_INTELLIGENCE_LOCALE",
+    "AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECONDS",
+    "AZURE_DOCUMENT_INTELLIGENCE_POLL_INTERVAL_SECONDS",
+    "OCR_LOW_CONFIDENCE_THRESHOLD",
+    "OCR_REQUEST_TIMEOUT_SECONDS",
+)
+
+
+def _ocr_benchmark_config():
+    """Read only server-side benchmark configuration; never accept keys in the UI."""
+    return {key: get_secret(key) for key in OCR_BENCHMARK_CONFIG_KEYS}
+
+
+def _ocr_benchmark_mime_type(filename: str) -> str:
+    suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return {"pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}.get(
+        suffix, ""
+    )
+
+
+def _ocr_benchmark_pdf_page_count(file_bytes: bytes) -> int:
+    """Inspect only a benchmark PDF's page tree before either cloud OCR call."""
+    reader = PdfReader(io.BytesIO(file_bytes))
+    if reader.is_encrypted and reader.decrypt("") == 0:
+        raise ValueError("Password-protected benchmark PDFs are not accepted.")
+    return len(reader.pages)
+
+
+def _format_ocr_confidence(confidence):
+    """Teacher-facing confidence label without misrepresenting it as accuracy."""
+    if not confidence:
+        return "Not returned"
+    try:
+        mean = float(confidence.get("mean"))
+        unit = str(confidence.get("unit") or "OCR")
+        return f"{mean:.1%} ({unit} model confidence)"
+    except (AttributeError, TypeError, ValueError):
+        return "Returned — inspect details"
+
+
+def _render_ocr_benchmark_result(result, reference_text: str, result_key: str):
+    """Show an OCR result for review; it is never sent to a grading model here."""
+    confidence = dict(result.confidence or {})
+    metadata = dict(result.metadata or {})
+
+    st.markdown(f"##### {result.provider_label}")
+    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    metric_1.metric("Provider", result.provider_label)
+    metric_2.metric("Pages", result.page_count if result.page_count is not None else "Not returned")
+    metric_3.metric("Transcript words", len(result.transcript.split()))
+    metric_4.metric("Mean confidence", _format_ocr_confidence(confidence))
+
+    low_count = confidence.get("low_confidence_count")
+    confidence_count = confidence.get("count")
+    if low_count is not None and confidence_count is not None:
+        threshold = confidence.get("low_confidence_threshold")
+        try:
+            threshold_label = f"{float(threshold):.0%}"
+        except (TypeError, ValueError):
+            threshold_label = "configured"
+        st.caption(
+            f"Provider returned {low_count}/{confidence_count} item(s) below "
+            f"the {threshold_label} review threshold. Model confidence is not proof of accuracy."
+        )
+    else:
+        st.caption("This provider response contained no usable per-item confidence scores.")
+
+    if result.handwriting_detected is True:
+        st.caption("✍️ The provider classified at least some text as handwritten.")
+    elif result.handwriting_detected is False:
+        st.caption("The provider returned style data but did not classify text as handwritten.")
+    else:
+        st.caption("Handwriting classification was not returned; do not infer it from OCR confidence.")
+
+    quality = metadata.get("image_quality_score")
+    if isinstance(quality, dict) and quality.get("mean") is not None:
+        st.caption(
+            f"Google image-quality score: {float(quality['mean']):.1%} "
+            "(a scan-quality signal, not a transcript-accuracy score)."
+        )
+
+    if result.low_confidence_words:
+        uncertain = []
+        for word in result.low_confidence_words[:12]:
+            page = f"p.{word.page_number}" if word.page_number else "page unknown"
+            uncertain.append(f"{page}: {word.text!r} ({word.confidence:.0%})")
+        st.warning("Verify these lowest-confidence OCR items against the scan: " + " · ".join(uncertain))
+
+    with st.expander("🔍 Verbatim OCR transcript — verify against the original scan", expanded=True):
+        st.text_area(
+            "OCR transcript",
+            value=result.transcript,
+            height=260,
+            key=f"ocr_benchmark_transcript_{result.provider_id}_{result_key}",
+            label_visibility="collapsed",
+            disabled=True,
+        )
+
+    if reference_text.strip():
+        comparison = compare_transcript(reference_text, result.transcript)
+        comparison_1, comparison_2, comparison_3 = st.columns(3)
+        comparison_1.metric("Reference words", comparison.reference_words)
+        comparison_2.metric("Word edits", comparison.word_edits)
+        comparison_3.metric(
+            "Exact-token WER",
+            f"{comparison.word_error_rate:.1%}" if comparison.word_error_rate is not None else "N/A",
+            help=(
+                "Whitespace is normalized only. Case, punctuation, spelling, and words remain exact so "
+                "the metric detects changes that could affect grading. Lower is better."
+            ),
+        )
+    else:
+        st.info("Add a teacher-verified reference transcript above to calculate exact-token WER locally.")
+
+
+def render_ocr_benchmark():
+    """Render the isolated Google-vs-Azure comparison tool for approved samples only."""
+    st.markdown("#### 🧪 De-identified OCR Benchmark")
+    st.warning(
+        "**Benchmark only — do not upload identifiable student work.** This tool compares Google Document "
+        "AI Enterprise OCR and Azure Document Intelligence Read on anonymized samples. It does not grade, "
+        "does not save OCR data to Supabase or Drive, and does not replace the normal Step 2 OCR route."
+    )
+    st.caption(
+        "Before upload, remove names, student IDs, class labels, contact details, identifying annotations, "
+        "and PDF/image metadata; use an anonymous filename such as `sample-001.pdf`."
+    )
+
+    config = _ocr_benchmark_config()
+    status_columns = st.columns(2)
+    providers_ready = True
+    for column, provider_id in zip(status_columns, OCR_BENCHMARK_PROVIDERS):
+        missing = missing_configuration(provider_id, config)
+        with column:
+            if missing:
+                providers_ready = False
+                st.error(f"🔴 {provider_label(provider_id)} is not configured.")
+                st.caption("Missing: " + ", ".join(missing))
+            else:
+                st.success(f"🟢 {provider_label(provider_id)} required settings are present.")
+
+    confirmation = st.checkbox(
+        "I confirm this sample, its filename, and its embedded metadata are de-identified and approved for this benchmark.",
+        key="ocr_benchmark_deidentified_confirmation",
+    )
+    sample = st.file_uploader(
+        "Upload one anonymous benchmark sample (PDF, JPG, or PNG)",
+        type=["pdf", "jpg", "jpeg", "png"],
+        key="ocr_benchmark_sample",
+        help="The same bytes are sent directly to both providers; no document URL or filename is sent in the API request.",
+    )
+    reference_text = st.text_area(
+        "Teacher-verified reference transcript (optional, stays local for WER)",
+        key="ocr_benchmark_reference",
+        height=160,
+        help="Paste the verbatim transcript after the sample has been de-identified. It is never sent to either OCR provider.",
+    )
+
+    file_bytes = b""
+    mime_type = ""
+    sample_valid = sample is not None
+    if sample is not None:
+        file_bytes = sample.getvalue()
+        mime_type = _ocr_benchmark_mime_type(sample.name)
+        if not mime_type or not _looks_like_extension(file_bytes, sample.name.rsplit(".", 1)[-1].lower()):
+            sample_valid = False
+            st.error("The benchmark file does not match its claimed PDF/JPG/PNG type.")
+        elif len(file_bytes) > MAX_UPLOAD_BYTES:
+            sample_valid = False
+            st.error(
+                f"This benchmark sample is {len(file_bytes) / (1024 * 1024):.1f} MB, over the "
+                f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB safety limit."
+            )
+        elif mime_type == "application/pdf":
+            try:
+                page_count = _ocr_benchmark_pdf_page_count(file_bytes)
+                if page_count > MAX_PDF_PAGES:
+                    sample_valid = False
+                    st.error(
+                        f"This benchmark PDF has {page_count} pages, over the {MAX_PDF_PAGES}-page safety limit."
+                    )
+            except Exception:
+                # Benchmark documents must be locally inspectable before any cloud call;
+                # do not use a provider as a format validator for an unknown PDF.
+                sample_valid = False
+                st.error("The PDF page count could not be checked safely, so it will not be sent to OCR.")
+
+    run_comparison = st.button(
+        "Run Google + Azure OCR comparison",
+        type="primary",
+        key="run_ocr_benchmark",
+        disabled=not (confirmation and sample_valid and providers_ready),
+        width="stretch",
+    )
+
+    sample_fingerprint = fingerprint_bytes(file_bytes) if file_bytes else ""
+    if run_comparison and sample_valid and confirmation and providers_ready:
+        outcomes = {}
+        for provider_id in OCR_BENCHMARK_PROVIDERS:
+            with st.spinner(f"Reading the de-identified sample with {provider_label(provider_id)}…"):
+                try:
+                    # The established bounded retry policy handles 429/5xx without caching a failure.
+                    outcomes[provider_id] = {
+                        "result": _retry_with_backoff(
+                            lambda provider=provider_id: run_ocr(provider, file_bytes, mime_type, config),
+                            label=f"{provider_label(provider_id)} OCR",
+                        ),
+                        "error": "",
+                    }
+                except OCRProviderError as exc:
+                    logger.warning("OCR benchmark provider %s failed with HTTP status %s", provider_id, exc.status_code)
+                    outcomes[provider_id] = {"result": None, "error": " ".join(str(exc).split())[:300]}
+                except Exception as exc:
+                    logger.warning("OCR benchmark provider %s failed: %s", provider_id, type(exc).__name__)
+                    outcomes[provider_id] = {
+                        "result": None,
+                        "error": f"{provider_label(provider_id)} could not complete the benchmark request.",
+                    }
+        # Session-only storage lets the teacher compare results after widget reruns; it is never persisted.
+        st.session_state["ocr_benchmark_results"] = {
+            "sample_fingerprint": sample_fingerprint,
+            "outcomes": outcomes,
+        }
+
+    stored = st.session_state.get("ocr_benchmark_results") or {}
+    if stored.get("sample_fingerprint") == sample_fingerprint and stored.get("outcomes"):
+        st.divider()
+        st.markdown("#### Comparison results")
+        for provider_id in OCR_BENCHMARK_PROVIDERS:
+            outcome = stored["outcomes"].get(provider_id, {})
+            result = outcome.get("result")
+            if result is None:
+                st.error(outcome.get("error") or f"{provider_label(provider_id)} returned no benchmark result.")
+                continue
+            _render_ocr_benchmark_result(result, reference_text, sample_fingerprint[:12])
+    elif stored.get("outcomes") and sample_fingerprint:
+        st.info("Previous benchmark results belong to a different sample and are hidden.")
+
+    st.caption(
+        "For a multi-sample CSV comparison—including WER, model confidence, low-confidence rate, teacher "
+        "correction time, and post-review grade difference—run `python scripts/ocr_benchmark.py --help`."
+    )
+
+
 # --- HEADER & STEPPER ---
 col_logo, col_title, col_time = st.columns([1, 3, 1], vertical_alignment="center")
 
@@ -2687,7 +2969,7 @@ with wizard_tab3:
                                 "text/plain",
                             )
                             if drive_id:
-                                st.caption(f"📁 Report filed to Google Drive.")
+                                st.caption("📁 Report filed to Google Drive.")
                             else:
                                 st.caption(
                                     "📁 Drive upload skipped — check **DRIVE_FOLDER_ID** and the "
@@ -2925,8 +3207,8 @@ if IS_ADMIN and admin_tab:
                 st.session_state.last_seen_log_id = latest_log.get("id")
 
         # 4. DEFINE SUB-TABS
-        admin_sub1, admin_sub2, admin_sub3 = st.tabs(
-            ["📊 Insights", "📝 Exemplars & Audit", "⚙️ System & Logs"]
+        admin_sub1, admin_sub2, admin_sub3, admin_sub4 = st.tabs(
+            ["📊 Insights", "📝 Exemplars & Audit", "⚙️ System & Logs", "🧪 OCR Benchmark"]
         )
 
         # --- SUB-TAB 1: ACADEMIC & PEDAGOGICAL INSIGHTS ---
@@ -3094,6 +3376,10 @@ if IS_ADMIN and admin_tab:
 
                 st.write(f"• Gemini Engine: {'🟢 Online' if gemini_check else '🔴 Key Missing'}")
                 st.write(f"• Groq Llama Engine: {'🟢 Online' if groq_check else '🔴 Key Missing'}")
+
+        # --- SUB-TAB 4: CONTROLLED OCR COMPARISON ---
+        with admin_sub4:
+            render_ocr_benchmark()
 
 # --- FOOTER ---
 st.markdown(

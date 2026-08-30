@@ -41,3 +41,11 @@ dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# --- Controlled OCR benchmark material --------------------------------------
+# Benchmark scans, reference transcripts, and comparison exports can still be
+# sensitive educational data even after de-identification. Keep them local or
+# in the school-approved storage location, never in this source repository.
+/benchmarks/
+/benchmark-results/
+/ocr-benchmark-results/
