@@ -49,8 +49,9 @@ jobs:
 
       # The check that would have caught the outage. No stub, no mock: it
       # imports the real module, so any missing or renamed dependency fails here.
-      - name: Every import app.py makes must resolve
-        run: python -c "import app; print('OK: all imports resolve')"
+         - name: Every import app.py makes must resolve
+     run: |
+       python -c "import app; print('OK: all imports resolve')"
 
       # Executes the whole script the way a browser session would and surfaces
       # anything raised while the UI renders.
