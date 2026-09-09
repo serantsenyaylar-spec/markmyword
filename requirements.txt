@@ -17,7 +17,7 @@ google-genai==2.20.0
 groq==1.7.0
 gspread==6.2.1
 google-auth==2.57.0
-google-api-python-client==2.199.0
+google-api-python-client==2.200.0
 plotly==7.0.0
 authlib==1.7.2
 pydantic==2.13.4
