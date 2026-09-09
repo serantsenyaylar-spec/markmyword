@@ -22,6 +22,6 @@ plotly==7.0.0
 authlib==1.7.2
 pydantic==2.13.4
 docx2txt==0.9
-pypdf==6.16.2
+pypdf==6.17.0
 supabase==2.31.0
 requests==2.34.2
