@@ -13,7 +13,7 @@
 # SDK or system OCR package is required. pypdf handles native PDF text first.
 streamlit==1.62.0
 pandas==3.0.5
-google-genai==2.20.0
+google-genai==2.22.0
 groq==1.7.0
 gspread==6.2.1
 google-auth==2.57.0
